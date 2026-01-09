@@ -15,8 +15,10 @@ chmod 0666 /dev/kvm || true
 
 wget https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img -O cloud.img
 
-# Resize to target size
-qemu-img resize cloud.img ${TARGET_SIZE_GB}G
+# Resize by adding space (using + is required to avoid passt networking issues)
+# Add slightly less than target since cloud image is ~660MB
+RESIZE_AMOUNT=$((TARGET_SIZE_GB - 1))
+qemu-img resize cloud.img +${RESIZE_AMOUNT}G
 
 # Copy small files with virt-customize
 virt-customize -a cloud.img \
