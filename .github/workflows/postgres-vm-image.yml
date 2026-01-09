@@ -16,7 +16,7 @@ on:
       image_resize_gb:
         description: "The cloud image is resized by this value in GB"
         required: true
-        default: 20
+        default: 6
         type: number
       upload_image:
         description: "Upload image to MinIO cluster"
@@ -43,6 +43,10 @@ jobs:
 
       - name: Check out code
         uses: actions/checkout@v3
+
+      - name: Download packages
+        run: |
+          sudo ./download_packages.sh
 
       - name: Build image
         run: |
