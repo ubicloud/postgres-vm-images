@@ -21,7 +21,7 @@ RESIZE_AMOUNT=$((TARGET_SIZE_GB - 1))
 qemu-img resize cloud.img +${RESIZE_AMOUNT}G
 
 # Copy small files with virt-customize
-virt-customize -a cloud.img \
+virt-customize --no-network -a cloud.img \
   --copy-in setup_01.sh:/tmp/ \
   --copy-in setup_02.sh:/tmp/ \
   --copy-in setup_03.sh:/tmp/ \
@@ -31,7 +31,7 @@ virt-customize -a cloud.img \
 # This avoids passt networking initialization issues with large data
 virt-copy-in -a cloud.img downloads /tmp/
 
-virt-customize -a cloud.img --run-command "
+virt-customize --no-network -a cloud.img --run-command "
   growpart /dev/sda 1;
   resize2fs /dev/sda1;
   chmod +x /tmp/setup_01.sh;
@@ -39,13 +39,13 @@ virt-customize -a cloud.img --run-command "
   chmod +x /tmp/setup_03.sh;
 "
 
-virt-customize -a cloud.img --run-command "/tmp/setup_01.sh"
+virt-customize --no-network -a cloud.img --run-command "/tmp/setup_01.sh"
 
-virt-customize -a cloud.img --run-command "/tmp/setup_02.sh"
+virt-customize --no-network -a cloud.img --run-command "/tmp/setup_02.sh"
 
-virt-customize -a cloud.img --run-command "/tmp/setup_03.sh"
+virt-customize --no-network -a cloud.img --run-command "/tmp/setup_03.sh"
 
-virt-customize -a cloud.img --run-command "df -h > /tmp/df.txt"
+virt-customize --no-network -a cloud.img --run-command "df -h > /tmp/df.txt"
 virt-cat -a cloud.img /tmp/df.txt
 
 # =====================================
@@ -53,13 +53,13 @@ virt-cat -a cloud.img /tmp/df.txt
 # =====================================
 
 # Remove all existing ssh host keys
-virt-customize -a cloud.img --run-command "rm -f /etc/ssh/ssh_host_*"
+virt-customize --no-network -a cloud.img --run-command "rm -f /etc/ssh/ssh_host_*"
 
 # Delete the root password
-virt-customize -a cloud.img --run-command "passwd -d root"
+virt-customize --no-network -a cloud.img --run-command "passwd -d root"
 
 # Final cleanup
-virt-customize -a cloud.img --run-command "
+virt-customize --no-network -a cloud.img --run-command "
   apt-get clean;
   rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/log/*;
   rm -f /root/.bash_history /root/.lesshst /root/.cache;
