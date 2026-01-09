@@ -5,36 +5,77 @@ export DEBIAN_FRONTEND=noninteractive
 
 echo "=== Configuring PostgreSQL repositories and settings ==="
 
-# Install postgresql-common from the base repos (it should already be there)
-# If not, it will be installed on first boot
-
-# Create the PostgreSQL APT repository configuration
+# Create the PostgreSQL APT repository configuration for future use
 sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
-wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add - || true
+wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/pgdg.gpg || true
 
-# Add golang backports PPA for WAL-G building on first boot
+# Add golang backports PPA for future use
 add-apt-repository -y ppa:longsleep/golang-backports || true
 
-# Copy package lists to reference location for documentation
+# Copy package lists to reference location
 mkdir -p /usr/local/share/postgresql/packages
-cp /tmp/assets/*.txt /usr/local/share/postgresql/packages/ || true
+cp /tmp/assets/16.txt /tmp/assets/17.txt /tmp/assets/18.txt /tmp/assets/common.txt /usr/local/share/postgresql/packages/
+chown -R root:root /usr/local/share/postgresql/packages
+chmod 755 /usr/local/share/postgresql/packages
+chmod 644 /usr/local/share/postgresql/packages/*.txt
 
-# Copy downloaded packages to /var/cache for later installation
-mkdir -p /var/cache/postgresql-packages
-cp /tmp/downloads/packages/*.deb /var/cache/postgresql-packages/ 2>/dev/null || true
+echo "=== Installing PostgreSQL packages from cache ==="
 
-# Copy WAL-G source for building on first boot
-mkdir -p /usr/local/src
-cp -r /tmp/downloads/sources/wal-g /usr/local/src/ 2>/dev/null || true
+# Install packages from our downloaded cache
+cd /tmp/downloads/packages
+
+# Install build dependencies first (needed for WAL-G and pguint)
+dpkg -i make_*.deb || true
+dpkg -i gcc_*.deb g++_*.deb || true
+dpkg -i build-essential_*.deb || true
+dpkg -i cmake_*.deb || true
+dpkg -i git_*.deb || true
+
+# Fix any dependency issues
+apt-get install -f -y || true
+
+# Install golang packages for WAL-G
+dpkg -i golang-*.deb || true
+apt-get install -f -y || true
+
+# Install postgresql-common and configure it
+dpkg -i postgresql-common*.deb || true
+apt-get install -f -y || true
+
+# Configure PostgreSQL with data checksums and no auto cluster creation
+echo "initdb_options = '--data-checksums'" >> /etc/postgresql-common/createcluster.conf
+echo "create_main_cluster = 'off'" >> /etc/postgresql-common/createcluster.conf
+mkdir -p /etc/postgresql-common/createcluster.d
+echo "include_dir = '/etc/postgresql-common/createcluster.d'" >> /etc/postgresql-common/createcluster.conf
+
+# Install all PostgreSQL packages (they won't auto-create clusters due to config above)
+# This ensures packages are available and cached for specific version installations
+for deb in postgresql-*.deb pgbouncer*.deb; do
+    [ -f "$deb" ] && dpkg -i "$deb" || true
+done
+
+# Fix any remaining dependency issues
+apt-get install -f -y || true
+
+cd /
 
 echo "=== Setting up users and groups ==="
 
-# Set up users and groups
+# Create users
 adduser --disabled-password --gecos '' prometheus || true
 adduser --disabled-password --gecos '' ubi_monitoring || true
+
+# Create cert_readers group and add users to it
 groupadd cert_readers || true
-# Note: postgres user will be created when PostgreSQL is installed
+usermod --append --groups cert_readers postgres || true
+usermod --append --groups cert_readers prometheus || true
+
+echo "=== Copying source code for building ==="
+
+# Copy WAL-G and pguint source for building
+mkdir -p /usr/local/src
+cp -r /tmp/downloads/sources/wal-g /usr/local/src/ 2>/dev/null || true
+cp -r /tmp/downloads/sources/pguint /usr/local/src/ 2>/dev/null || true
 
 echo "=== Setup 01 complete ==="
-echo "PostgreSQL packages and WAL-G source copied to /var/cache/postgresql-packages and /usr/local/src/wal-g"
-echo "These can be installed/built on first boot via cloud-init or manually"
+echo "PostgreSQL packages installed, users configured, WAL-G and pguint source ready for build"

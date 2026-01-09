@@ -82,12 +82,21 @@ cd wal-g
 git remote add origin https://github.com/wal-g/wal-g.git
 git fetch origin --depth 1 cf1ce0f5b69048e31d740b508a79d8294707e339
 git reset --hard FETCH_HEAD
-cd ../../..
+cd ..
+
+echo "=== Cloning pguint source ==="
+if [ -d pguint ]; then
+    rm -rf pguint
+fi
+
+git clone --depth 1 https://github.com/petere/pguint.git
+cd ../..
 
 echo "=== Download Summary ==="
 echo "PostgreSQL packages: $(ls downloads/packages/*.deb 2>/dev/null | wc -l) files"
 echo "Monitoring binaries: $(ls downloads/binaries/*.tar.gz 2>/dev/null | wc -l) files"
 echo "WAL-G source: $(du -sh downloads/sources/wal-g 2>/dev/null | cut -f1)"
+echo "pguint source: $(du -sh downloads/sources/pguint 2>/dev/null | cut -f1)"
 
 echo ""
 echo "All downloads complete! Ready to build."
