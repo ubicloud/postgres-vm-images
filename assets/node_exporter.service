@@ -1,0 +1,27 @@
+[Unit]
+Description=Prometheus Node Exporter
+Documentation=https://prometheus.io/docs/guides/node-exporter/
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=prometheus
+Group=prometheus
+Type=simple
+ExecStart=/usr/bin/node_exporter \
+    --collector.disable-defaults \
+    --collector.cpu \
+    --collector.diskstats \
+    --collector.filesystem \
+    --collector.loadavg \
+    --collector.meminfo \
+    --collector.netdev \
+    --collector.uname \
+    --web.disable-exporter-metrics \
+    --collector.diskstats.device-exclude="^(z?ram|loop|fd|(h|s|v|xv)d[a-z]|nvme\\d+n\\d+p)\\d+$|vda|vdc" \
+    --collector.filesystem.mount-points-exclude="^/(dev|proc|run|sys|var|boot|)($|/)"
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

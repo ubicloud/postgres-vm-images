@@ -1,0 +1,106 @@
+name: Build PostgreSQL VM Image
+on:
+  workflow_dispatch:
+    inputs:
+      image_type:
+        description: "Image type"
+        required: true
+        default: postgres-ubuntu-jammy
+        type: choice
+        options:
+          - postgres-ubuntu-jammy
+      image_suffix:
+        description: "Suffix for image name"
+        type: string
+        default: "20260109.1.0"
+      image_resize_gb:
+        description: "The cloud image is resized by this value in GB"
+        required: true
+        default: 20
+        type: number
+      upload_image:
+        description: "Upload image to MinIO cluster"
+        default: false
+        type: boolean
+      runner_label:
+        description: "Runner label"
+        required: true
+        default: "ubicloud-standard-4"
+        type: string
+      sleep_minutes:
+        description: "Runner sleep in minutes. 0 for no sleep"
+        required: true
+        type: number
+        default: 0
+
+jobs:
+  build:
+    name: Build ${{ inputs.image_type }}-x64-${{ inputs.image_suffix }}
+    runs-on: ${{ inputs.runner_label }}
+    steps:
+      - name: Print inputs
+        run: echo "${{ toJSON(github.event.inputs) }}"
+
+      - name: Check out code
+        uses: actions/checkout@v3
+
+      - name: Build image
+        run: |
+          sudo ./build.sh ${{ inputs.image_resize_gb }}
+
+      - name: Install MinIO client
+        run: |
+          curl https://dl.min.io/client/mc/release/linux-amd64/mc -o mc
+          sudo mv mc /usr/bin/mc
+          sudo chmod +x /usr/bin/mc
+          mc --version
+
+      - name: Set MinIO root certificates
+        run: |
+          mkdir -p ~/.mc/certs/CAs
+          cat <<EOT > ~/.mc/certs/CAs/ubicloud_images_blob_storage_certs.crt
+          ${{ secrets.MINIO_ROOT_CERTIFICATES }}
+          EOT
+
+      - name: Set image name output
+        id: set_image_name
+        run: |
+          image_name=${{ inputs.image_type }}-x64-${{ inputs.image_suffix }}
+          echo "$image_name"
+          echo "MINIO_IMAGE_NAME=$image_name" >> $GITHUB_OUTPUT
+
+      - name: Sleep
+        if: ${{ inputs.sleep_minutes > 0 }}
+        run: |
+          sudo sh -c 'echo "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBF8s1PMJQfyKMrbi408/aFNXt1Ey14NIftFOtDtm2qo4JXU0dOEA5s7D8ADlskroMXtLQyPJjePHDn1OCNE/A8c= dev+ben@ubicloud.com" >> /home/runneradmin/.ssh/authorized_keys'
+          IPv4=$(curl -sL --ipv4 ifconfig.me)
+          echo "ssh runneradmin@$IPv4"
+          sleep $((${{ inputs.sleep_minutes }} * 60))
+
+      - name: Upload
+        if: ${{ inputs.upload_image }}
+        env:
+          MC_HOST_ubicloud: ${{ secrets.MINIO_CONNECTION_STRING }}
+        run: |
+          image_filename=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}.raw
+          sha_filename=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}.raw.sha256
+
+          mv postgres-vm-image.raw ${image_filename}
+          sha256sum ${image_filename} > ${sha_filename}
+
+          echo "### Image" >> $GITHUB_STEP_SUMMARY
+          du -h ${image_filename} >> $GITHUB_STEP_SUMMARY
+
+          echo "### Image SHA256" >> $GITHUB_STEP_SUMMARY
+          cat ${sha_filename} >> $GITHUB_STEP_SUMMARY
+
+          echo "### PostgreSQL Versions" >> $GITHUB_STEP_SUMMARY
+          echo "PostgreSQL 16, 17, 18 (packages cached)" >> $GITHUB_STEP_SUMMARY
+
+          echo "### Monitoring Stack" >> $GITHUB_STEP_SUMMARY
+          echo "- Prometheus v2.53.0" >> $GITHUB_STEP_SUMMARY
+          echo "- Node Exporter v1.8.1" >> $GITHUB_STEP_SUMMARY
+          echo "- Postgres Exporter v0.15.0" >> $GITHUB_STEP_SUMMARY
+
+          mc cp ./${image_filename} ubicloud/ubicloud-images/${image_filename}
+          mc cp ./${sha_filename} ubicloud/ubicloud-images/${sha_filename}

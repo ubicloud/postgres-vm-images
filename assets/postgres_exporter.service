@@ -1,0 +1,18 @@
+[Unit]
+Description=Prometheus PostgreSQL Exporter
+Documentation=https://github.com/prometheus-community/postgres_exporter
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=ubi_monitoring
+Group=ubi_monitoring
+Type=simple
+Environment=DATA_SOURCE_NAME="host=/var/run/postgresql dbname=postgres"
+ExecStart=/usr/bin/postgres_exporter \
+    --no-collector.stat_bgwriter
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

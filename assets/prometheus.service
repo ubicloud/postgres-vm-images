@@ -1,0 +1,22 @@
+[Unit]
+Description=Prometheus Monitoring System
+Documentation=https://prometheus.io/docs/introduction/overview/
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=prometheus
+Group=prometheus
+Type=simple
+ExecStart=/usr/bin/prometheus \
+    --config.file=/home/prometheus/prometheus.yml \
+    --web.config.file=/home/prometheus/web-config.yml \
+    --storage.tsdb.path=/home/prometheus/data \
+    --web.console.templates=/home/prometheus/consoles \
+    --web.console.libraries=/home/prometheus/console_libraries
+    --storage.tsdb.retention.size=1GB
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
