@@ -16,12 +16,16 @@ chmod 0666 /dev/kvm || true
 wget https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img -O cloud.img
 qemu-img resize cloud.img +${IMAGE_RESIZE_GB}G
 
+# Copy small files with virt-customize
 virt-customize -a cloud.img \
   --copy-in setup_01.sh:/tmp/ \
   --copy-in setup_02.sh:/tmp/ \
   --copy-in setup_03.sh:/tmp/ \
-  --copy-in assets:/tmp/ \
-  --copy-in downloads:/tmp/
+  --copy-in assets:/tmp/
+
+# Copy large downloads directory separately with virt-copy-in
+# This avoids passt networking initialization issues with large data
+virt-copy-in -a cloud.img downloads /tmp/
 
 virt-customize -a cloud.img --run-command "
   growpart /dev/sda 1;
