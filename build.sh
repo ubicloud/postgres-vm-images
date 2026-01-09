@@ -4,6 +4,10 @@ set -uexo pipefail
 # Default to 6GB additional space for ~8GB total image (matching postgres-images)
 IMAGE_RESIZE_GB="${1:-6}"
 
+# Configure libguestfs to work in GitHub Actions environment
+# Use direct backend to avoid passt networking issues
+export LIBGUESTFS_BACKEND=direct
+
 apt-get update
 apt-get install -y guestfs-tools
 chmod 0644 /boot/vmlinuz*
