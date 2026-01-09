@@ -1,7 +1,8 @@
 #!/bin/bash
 set -uexo pipefail
 
-IMAGE_RESIZE_GB="${1:-20}"
+# Default to 6GB additional space for ~8GB total image (matching postgres-images)
+IMAGE_RESIZE_GB="${1:-6}"
 
 apt-get update
 apt-get install -y guestfs-tools
