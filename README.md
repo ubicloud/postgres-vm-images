@@ -45,19 +45,25 @@ The build process:
 
 ## Usage
 
-### Basic Build
+### Quick Start
 
 ```bash
+# Basic build (20GB disk)
 sudo ./build.sh
+
+# Custom disk size (30GB)
+sudo ./build.sh 30
 ```
 
-This creates a 20GB disk image by default.
+### Manual Build Instructions
 
-### Custom Disk Size
+For detailed manual build instructions, troubleshooting, and testing, see **[MANUAL_BUILD.md](MANUAL_BUILD.md)**.
 
-```bash
-sudo ./build.sh 30  # Creates a 30GB image
-```
+**Prerequisites:**
+- Ubuntu 20.04+ or Debian-based Linux VM
+- At least 4GB RAM (8GB recommended)
+- 30GB free disk space
+- Root/sudo access
 
 ### Output
 

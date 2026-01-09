@@ -3,6 +3,11 @@ set -uexo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
+# Update to generic HWE kernel (6.5/6.8 series for Ubuntu 22.04)
+# This provides a newer, stable kernel for cloud environments
+apt-get update
+apt-get install -y linux-image-generic-hwe-22.04 linux-headers-generic-hwe-22.04
+
 # Update OpenSSH
 apt-get update -qq
 apt -qq -y satisfy 'openssh-server (>= 1:8.9p1-3ubuntu0.10)'

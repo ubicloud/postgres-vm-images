@@ -25,14 +25,6 @@ virt-customize -a cloud.img --run-command "
   chmod +x /tmp/setup_03.sh
 "
 
-# Update to generic HWE kernel (6.5 series for Ubuntu 22.04)
-# This replaces the Azure-specific kernel with a generic cloud kernel
-virt-customize -a cloud.img --run-command "
-  export DEBIAN_FRONTEND=noninteractive;
-  apt-get update;
-  apt-get install -y linux-image-generic-hwe-22.04 linux-headers-generic-hwe-22.04
-"
-
 virt-customize -a cloud.img --run-command "/tmp/setup_01.sh"
 
 virt-customize -a cloud.img --run-command "/tmp/setup_02.sh"
