@@ -11,8 +11,6 @@ echo "=== Downloading packages for Ubuntu 22.04 (jammy) ==="
 # Helper function to download a package for jammy
 download_pg_package() {
     local pkg=$1
-    local base_url="http://apt.postgresql.org/pub/repos/apt/pool/main"
-    local first_letter=$(echo $pkg | cut -c1)
 
     # Try to find and download the package
     echo "Downloading $pkg..."
