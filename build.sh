@@ -1,8 +1,8 @@
 #!/bin/bash
 set -uexo pipefail
 
-# Default to 6GB additional space for ~8GB total image (matching postgres-images)
-IMAGE_RESIZE_GB="${1:-6}"
+# Target final image size in GB (default 8GB to match postgres-images)
+TARGET_SIZE_GB="${1:-8}"
 
 # Configure libguestfs to work in GitHub Actions environment
 # Use direct backend to avoid passt networking issues
@@ -14,7 +14,9 @@ chmod 0644 /boot/vmlinuz*
 chmod 0666 /dev/kvm || true
 
 wget https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img -O cloud.img
-qemu-img resize cloud.img +${IMAGE_RESIZE_GB}G
+
+# Resize to target size
+qemu-img resize cloud.img ${TARGET_SIZE_GB}G
 
 # Copy small files with virt-customize
 virt-customize -a cloud.img \
@@ -67,4 +69,9 @@ virt-customize -a cloud.img --run-command "
   sync;
 "
 
-qemu-img convert -p -f qcow2 -O raw cloud.img postgres-vm-image.raw
+# Compact and convert to raw format
+echo "Compacting and converting to raw format..."
+virt-sparsify --convert raw cloud.img postgres-vm-image.raw
+
+echo "Final image size:"
+ls -lh postgres-vm-image.raw
