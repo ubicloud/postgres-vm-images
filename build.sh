@@ -15,14 +15,15 @@ virt-customize -a cloud.img \
   --copy-in setup_01.sh:/tmp/ \
   --copy-in setup_02.sh:/tmp/ \
   --copy-in setup_03.sh:/tmp/ \
-  --copy-in assets:/tmp/
+  --copy-in assets:/tmp/ \
+  --copy-in downloads:/tmp/
 
 virt-customize -a cloud.img --run-command "
   growpart /dev/sda 1;
   resize2fs /dev/sda1;
-  chmod +x /tmp/setup_01.sh
-  chmod +x /tmp/setup_02.sh
-  chmod +x /tmp/setup_03.sh
+  chmod +x /tmp/setup_01.sh;
+  chmod +x /tmp/setup_02.sh;
+  chmod +x /tmp/setup_03.sh;
 "
 
 virt-customize -a cloud.img --run-command "/tmp/setup_01.sh"
