@@ -25,7 +25,7 @@ on:
       runner_label:
         description: "Runner label"
         required: true
-        default: "ubicloud-standard-4"
+        default: "ubicloud-standard-4-ubuntu-2204"
         type: string
       sleep_minutes:
         description: "Runner sleep in minutes. 0 for no sleep"
@@ -44,20 +44,9 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v3
 
-      - name: Download packages
-        run: |
-          sudo ./download_packages.sh
-
-      - name: Update libguestfs
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --only-upgrade libguestfs-tools libguestfs0
-
       - name: Build image
-        env:
-          LIBGUESTFS_BACKEND: direct
         run: |
-          sudo -E ./build.sh ${{ inputs.image_resize_gb }}
+          sudo ./build.sh ${{ inputs.image_resize_gb }}
 
       - name: Install MinIO client
         run: |

@@ -1,79 +1,73 @@
 #!/bin/bash
 set -uexo pipefail
 
-# Target final image size in GB (default 8GB to match postgres-images)
+# Target final image size in GB (default 8GB)
 TARGET_SIZE_GB="${1:-8}"
 
-# Configure libguestfs to work in GitHub Actions environment
-# Use direct backend to avoid passt networking issues
-export LIBGUESTFS_BACKEND=direct
+# Install dependencies
+apt update
+apt -y upgrade
+apt install -y guestfs-tools
 
-apt-get update
-apt-get install -y guestfs-tools
+# Configure permissions for libguestfs
 chmod 0644 /boot/vmlinuz*
-chmod 0666 /dev/kvm || true
 
+# Download Ubuntu cloud image
 wget https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img -O cloud.img
 
-# Resize by adding space (using + is required to avoid passt networking issues)
-# Add slightly less than target since cloud image is ~660MB
-RESIZE_AMOUNT=$((TARGET_SIZE_GB - 1))
-qemu-img resize cloud.img +${RESIZE_AMOUNT}G
+# Resize image and expand partition using virt-resize
+qemu-img create -f qcow2 resized.img ${TARGET_SIZE_GB}G
+virt-resize --expand /dev/sda1 cloud.img resized.img
+mv resized.img cloud.img
 
-# Copy small files with virt-customize
-virt-customize --no-network -a cloud.img \
+# Copy setup scripts and assets
+virt-customize -a cloud.img \
   --copy-in setup_01.sh:/tmp/ \
   --copy-in setup_02.sh:/tmp/ \
   --copy-in setup_03.sh:/tmp/ \
   --copy-in assets:/tmp/
 
-# Copy large downloads directory separately with virt-copy-in
-# This avoids passt networking initialization issues with large data
-virt-copy-in -a cloud.img downloads /tmp/
+# Make scripts executable and run them
+virt-customize -a cloud.img --run-command "chmod +x /tmp/setup_01.sh /tmp/setup_02.sh /tmp/setup_03.sh"
+virt-customize -a cloud.img --run-command "/tmp/setup_01.sh"
+virt-customize -a cloud.img --run-command "/tmp/setup_02.sh"
+virt-customize -a cloud.img --run-command "/tmp/setup_03.sh"
 
-virt-customize --no-network -a cloud.img --run-command "
-  growpart /dev/sda 1;
-  resize2fs /dev/sda1;
-  chmod +x /tmp/setup_01.sh;
-  chmod +x /tmp/setup_02.sh;
-  chmod +x /tmp/setup_03.sh;
-"
-
-virt-customize --no-network -a cloud.img --run-command "/tmp/setup_01.sh"
-
-virt-customize --no-network -a cloud.img --run-command "/tmp/setup_02.sh"
-
-virt-customize --no-network -a cloud.img --run-command "/tmp/setup_03.sh"
-
-virt-customize --no-network -a cloud.img --run-command "df -h > /tmp/df.txt"
+# Show disk usage
+virt-customize -a cloud.img --run-command "df -h > /tmp/df.txt"
 virt-cat -a cloud.img /tmp/df.txt
 
 # =====================================
 # ============== CLEAN UP =============
 # =====================================
 
-# Remove all existing ssh host keys
-virt-customize --no-network -a cloud.img --run-command "rm -f /etc/ssh/ssh_host_*"
+# Remove SSH host keys (will be regenerated on first boot)
+virt-customize -a cloud.img --run-command "rm -f /etc/ssh/ssh_host_*"
 
-# Delete the root password
-virt-customize --no-network -a cloud.img --run-command "passwd -d root"
+# Delete root password
+virt-customize -a cloud.img --run-command "passwd -d root"
 
-# Final cleanup
-virt-customize --no-network -a cloud.img --run-command "
-  apt-get clean;
-  rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/log/*;
-  rm -f /root/.bash_history /root/.lesshst /root/.cache;
-  rm -rf /tmp/* /var/tmp/*;
-  rm -f /var/lib/dbus/machine-id;
-  rm -rf /var/lib/cloud;
-  cloud-init clean --logs --machine-id;
-  truncate -s 0 /etc/machine-id;
-  sync;
+# Clean package cache and logs
+virt-customize -a cloud.img --run-command "
+  apt-get clean
+  rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/log/*
+  rm -f /root/.bash_history /root/.lesshst
+  rm -rf /root/.cache
+  rm -rf /tmp/* /var/tmp/*
 "
 
-# Compact and convert to raw format
-echo "Compacting and converting to raw format..."
-virt-sparsify --convert raw cloud.img postgres-vm-image.raw
+# Zero-fill free space for better compression (dd fails when full, which is expected)
+virt-customize -a cloud.img --run-command "dd if=/dev/zero of=/zero.fill bs=1M 2>/dev/null; rm -f /zero.fill"
+
+# Clean cloud-init and machine-id
+virt-customize -a cloud.img --run-command "rm -rf /var/lib/cloud"
+virt-customize -a cloud.img --run-command "cloud-init clean --logs"
+virt-customize -a cloud.img --truncate /etc/machine-id
+
+# Convert to raw format
+echo "Converting to raw format..."
+qemu-img convert -p -f qcow2 -O raw cloud.img postgres-vm-image.raw
 
 echo "Final image size:"
 ls -lh postgres-vm-image.raw
+du -h postgres-vm-image.raw
