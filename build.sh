@@ -6,7 +6,7 @@ TARGET_SIZE_GB="${1:-8}"
 
 apt update
 apt -y upgrade
-apt install -y guestfs-tools
+apt install -y guestfs-tools slirp4netns
 chmod 0644 /boot/vmlinuz*
 chmod 0666 /dev/kvm || true
 
