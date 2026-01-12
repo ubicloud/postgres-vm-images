@@ -25,7 +25,7 @@ on:
       runner_label:
         description: "Runner label"
         required: true
-        default: "ubicloud-standard-4"
+        default: "ubicloud-standard-4-ubuntu-2204"
         type: string
       sleep_minutes:
         description: "Runner sleep in minutes. 0 for no sleep"
