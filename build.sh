@@ -64,7 +64,7 @@ virt-customize -a cloud.img --run-command "dd if=/dev/zero of=/zero.fill bs=1M 2
 
 # Clean cloud-init and machine-id
 virt-customize -a cloud.img --run-command "rm -rf /var/lib/cloud"
-virt-customize -a cloud.img --run-command "cloud-init clean --logs --machine-id"
+virt-customize -a cloud.img --run-command "cloud-init clean --logs"
 virt-customize -a cloud.img --truncate /etc/machine-id
 
 # Convert to raw format
