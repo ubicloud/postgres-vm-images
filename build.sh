@@ -11,7 +11,6 @@ apt install -y guestfs-tools
 
 # Configure permissions for libguestfs
 chmod 0644 /boot/vmlinuz*
-chmod 0666 /dev/kvm
 
 # Download Ubuntu cloud image
 wget https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img -O cloud.img
