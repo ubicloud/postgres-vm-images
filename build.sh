@@ -15,8 +15,10 @@ chmod 0644 /boot/vmlinuz*
 # Download Ubuntu cloud image
 wget https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img -O cloud.img
 
-# Resize to target size
-qemu-img resize cloud.img ${TARGET_SIZE_GB}G
+# Resize image and expand partition using virt-resize
+qemu-img create -f qcow2 resized.img ${TARGET_SIZE_GB}G
+virt-resize --expand /dev/sda1 cloud.img resized.img
+mv resized.img cloud.img
 
 # Copy setup scripts and assets
 virt-customize -a cloud.img \
@@ -24,10 +26,6 @@ virt-customize -a cloud.img \
   --copy-in setup_02.sh:/tmp/ \
   --copy-in setup_03.sh:/tmp/ \
   --copy-in assets:/tmp/
-
-# Expand partition and filesystem
-virt-customize -a cloud.img --run-command "growpart /dev/sda 1"
-virt-customize -a cloud.img --run-command "resize2fs /dev/sda1"
 
 # Make scripts executable and run them
 virt-customize -a cloud.img --run-command "chmod +x /tmp/setup_01.sh /tmp/setup_02.sh /tmp/setup_03.sh"
