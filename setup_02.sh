@@ -5,14 +5,17 @@ export DEBIAN_FRONTEND=noninteractive
 
 echo "=== Installing build dependencies ==="
 
+# Refresh package indexes
+apt-get update
+
 # Install build tools
 apt-get install -y golang-go cmake
 
 # Install Python and PostgreSQL development packages for all versions
 apt-get install -y python3 python3-pip postgresql-server-dev-16 postgresql-server-dev-17 postgresql-server-dev-18
 
-# Create symlink for python if needed
-ln -sf /usr/bin/python3 /usr/bin/python || true
+# Create symlink for python if needed (may already exist)
+ln -sf /usr/bin/python3 /usr/bin/python 2>/dev/null || true
 
 echo "=== Building and installing WAL-G ==="
 
