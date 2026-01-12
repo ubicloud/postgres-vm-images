@@ -1,0 +1,11 @@
+#!/bin/env ruby
+# frozen_string_literal: true
+
+require_relative "../../common/lib/util"
+
+# ParadeDB PostgreSQL post-installation
+# Creates ParadeDB extensions along with common ones
+r "sudo -u postgres psql -c 'CREATE EXTENSION IF NOT EXISTS pg_cron'"
+r "sudo -u postgres psql -c 'CREATE EXTENSION IF NOT EXISTS pg_search'"
+r "sudo -u postgres psql -c 'CREATE EXTENSION IF NOT EXISTS pg_analytics'"
+r "sudo -u postgres psql -c 'CREATE EXTENSION IF NOT EXISTS vector'"

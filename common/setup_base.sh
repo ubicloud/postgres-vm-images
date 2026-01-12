@@ -28,7 +28,7 @@ echo "include_dir = '/etc/postgresql-common/createcluster.d'" >> /etc/postgresql
 
 # Copy package lists to reference location
 mkdir -p /usr/local/share/postgresql/packages
-cp /tmp/assets/16.txt /tmp/assets/17.txt /tmp/assets/18.txt /tmp/assets/common.txt /usr/local/share/postgresql/packages/
+cp /tmp/common/assets/packages/*.txt /usr/local/share/postgresql/packages/
 chown -R root:root /usr/local/share/postgresql/packages
 chmod 755 /usr/local/share/postgresql/packages
 chmod 644 /usr/local/share/postgresql/packages/*.txt
@@ -53,4 +53,4 @@ groupadd cert_readers
 usermod --append --groups cert_readers postgres
 usermod --append --groups cert_readers prometheus
 
-echo "=== Setup 01 complete ==="
+echo "=== Base setup complete ==="

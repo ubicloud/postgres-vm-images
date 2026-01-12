@@ -2,17 +2,18 @@ name: Build PostgreSQL VM Image
 on:
   workflow_dispatch:
     inputs:
-      image_type:
-        description: "Image type"
+      flavor:
+        description: "Image flavor"
         required: true
-        default: postgres-ubuntu-jammy
+        default: standard
         type: choice
         options:
-          - postgres-ubuntu-jammy
+          - standard
+          - paradedb
       image_suffix:
         description: "Suffix for image name"
         type: string
-        default: "20260109.1.0"
+        default: "20260112.1.0"
       image_resize_gb:
         description: "Target final image size in GB (exact size, not additional space)"
         required: true
@@ -35,7 +36,7 @@ on:
 
 jobs:
   build:
-    name: Build ${{ inputs.image_type }}-x64-${{ inputs.image_suffix }}
+    name: Build postgres-${{ inputs.flavor }}-ubuntu-2204-x64-${{ inputs.image_suffix }}
     runs-on: ${{ inputs.runner_label }}
     steps:
       - name: Print inputs
@@ -46,7 +47,7 @@ jobs:
 
       - name: Build image
         run: |
-          sudo ./build.sh ${{ inputs.image_resize_gb }}
+          sudo ./build.sh ${{ inputs.flavor }} ${{ inputs.image_resize_gb }}
 
       - name: Install MinIO client
         run: |
@@ -65,7 +66,7 @@ jobs:
       - name: Set image name output
         id: set_image_name
         run: |
-          image_name=${{ inputs.image_type }}-x64-${{ inputs.image_suffix }}
+          image_name=postgres-${{ inputs.flavor }}-ubuntu-2204-x64-${{ inputs.image_suffix }}
           echo "$image_name"
           echo "MINIO_IMAGE_NAME=$image_name" >> $GITHUB_OUTPUT
 
@@ -85,7 +86,7 @@ jobs:
           image_filename=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}.raw
           sha_filename=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}.raw.sha256
 
-          mv postgres-vm-image.raw ${image_filename}
+          mv postgres-${{ inputs.flavor }}-image.raw ${image_filename}
           sha256sum ${image_filename} > ${sha_filename}
 
           echo "### Image" >> $GITHUB_STEP_SUMMARY
@@ -94,8 +95,15 @@ jobs:
           echo "### Image SHA256" >> $GITHUB_STEP_SUMMARY
           cat ${sha_filename} >> $GITHUB_STEP_SUMMARY
 
+          echo "### Flavor" >> $GITHUB_STEP_SUMMARY
+          echo "${{ inputs.flavor }}" >> $GITHUB_STEP_SUMMARY
+
           echo "### PostgreSQL Versions" >> $GITHUB_STEP_SUMMARY
-          echo "PostgreSQL 16, 17, 18 (packages cached)" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.flavor }}" = "paradedb" ]; then
+            echo "PostgreSQL 16, 17 with ParadeDB extensions" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "PostgreSQL 16, 17, 18 (packages cached)" >> $GITHUB_STEP_SUMMARY
+          fi
 
           echo "### Monitoring Stack" >> $GITHUB_STEP_SUMMARY
           echo "- Prometheus v2.53.0" >> $GITHUB_STEP_SUMMARY

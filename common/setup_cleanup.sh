@@ -59,4 +59,4 @@ EOF
 # Update grub
 update-grub
 
-echo "=== Setup 03 complete ==="
+echo "=== Cleanup complete ==="
