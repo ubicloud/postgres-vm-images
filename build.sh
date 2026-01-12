@@ -40,6 +40,7 @@ virt-customize -a cloud.img \
 
 # Copy flavor-specific scripts and assets
 virt-customize -a cloud.img \
+  --mkdir /tmp/flavors \
   --copy-in flavors/${FLAVOR}:/tmp/flavors/
 
 # Make all scripts executable
