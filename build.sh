@@ -4,19 +4,15 @@ set -uexo pipefail
 # Target final image size in GB (default 8GB to match postgres-images)
 TARGET_SIZE_GB="${1:-8}"
 
-# Configure libguestfs to work in GitHub Actions environment
-# Use direct backend to avoid passt networking issues
-export LIBGUESTFS_BACKEND=direct
-
-apt-get update
-apt-get install -y guestfs-tools
+apt update
+apt -y upgrade
+apt install -y guestfs-tools
 chmod 0644 /boot/vmlinuz*
 chmod 0666 /dev/kvm || true
 
 wget https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img -O cloud.img
 
-# Resize by adding space (using + is required to avoid passt networking issues)
-# Add slightly less than target since cloud image is ~660MB
+# Resize by adding space (cloud image is ~660MB, so add target-1 to get target size)
 RESIZE_AMOUNT=$((TARGET_SIZE_GB - 1))
 qemu-img resize cloud.img +${RESIZE_AMOUNT}G
 

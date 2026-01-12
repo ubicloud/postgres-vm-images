@@ -50,10 +50,8 @@ jobs:
           sudo apt-get install -y --only-upgrade libguestfs-tools libguestfs0
 
       - name: Build image
-        env:
-          LIBGUESTFS_BACKEND: direct
         run: |
-          sudo -E ./build.sh ${{ inputs.image_resize_gb }}
+          sudo ./build.sh ${{ inputs.image_resize_gb }}
 
       - name: Install MinIO client
         run: |
