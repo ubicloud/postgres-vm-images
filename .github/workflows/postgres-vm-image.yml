@@ -2,51 +2,70 @@ name: Build PostgreSQL VM Image
 on:
   workflow_dispatch:
     inputs:
-      image_type:
-        description: "Image type"
+      flavor:
+        description: "Image flavor"
         required: true
-        default: postgres-ubuntu-jammy
+        default: standard
         type: choice
         options:
-          - postgres-ubuntu-jammy
+          - standard
+          - paradedb
       image_suffix:
-        description: "Suffix for image name"
+        description: "Suffix for image name (e.g., YYYYMMDD.X.Y)"
         type: string
-        default: "20260109.1.0"
-      image_resize_gb:
-        description: "The cloud image is resized by this value in GB"
         required: true
-        default: 20
+      image_resize_gb:
+        description: "Target final image size in GB (exact size, not additional space)"
+        required: true
+        default: 8
         type: number
       upload_image:
         description: "Upload image to MinIO cluster"
         default: false
         type: boolean
-      runner_label:
-        description: "Runner label"
-        required: true
-        default: "ubicloud-standard-4"
+      upload_r2:
+        description: "Upload to R2"
+        default: false
+        type: boolean
+      upload_aws_ami:
+        description: "Create AWS AMI"
+        default: false
+        type: boolean
+      aws_ami_regions:
+        description: "Additional regions to copy AMI to (comma-separated)"
         type: string
+        default: "us-east-1,us-east-2,eu-west-1,ap-southeast-2"
       sleep_minutes:
         description: "Runner sleep in minutes. 0 for no sleep"
         required: true
         type: number
         default: 0
+      build_only:
+        description: "Build only (skip all uploads) - useful for testing"
+        default: false
+        type: boolean
+      build_arm64:
+        description: "Build ARM64 image (in addition to x64)"
+        default: false
+        type: boolean
 
 jobs:
-  build:
-    name: Build ${{ inputs.image_type }}-x64-${{ inputs.image_suffix }}
-    runs-on: ${{ inputs.runner_label }}
+  # x64 build - always runs
+  build-x64:
+    name: Build postgres-${{ inputs.flavor }}-ubuntu-2204-x64-${{ inputs.image_suffix }}
+    runs-on: ubicloud-standard-4-ubuntu-2204
     steps:
       - name: Print inputs
-        run: echo "${{ toJSON(github.event.inputs) }}"
+        run: |
+          echo "Inputs: ${{ toJSON(github.event.inputs) }}"
+          echo "Architecture: x64"
 
       - name: Check out code
         uses: actions/checkout@v3
 
       - name: Build image
         run: |
-          sudo ./build.sh ${{ inputs.image_resize_gb }}
+          sudo ./build.sh ${{ inputs.flavor }} ${{ inputs.image_resize_gb }}
 
       - name: Install MinIO client
         run: |
@@ -65,9 +84,24 @@ jobs:
       - name: Set image name output
         id: set_image_name
         run: |
-          image_name=${{ inputs.image_type }}-x64-${{ inputs.image_suffix }}
+          if [ "${{ inputs.flavor }}" = "standard" ]; then
+            image_name=postgres-ubuntu-2204-x64-${{ inputs.image_suffix }}
+          else
+            image_name=postgres-${{ inputs.flavor }}-ubuntu-2204-x64-${{ inputs.image_suffix }}
+          fi
           echo "$image_name"
           echo "MINIO_IMAGE_NAME=$image_name" >> $GITHUB_OUTPUT
+
+      - name: Rename image file
+        run: |
+          image_filename=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}.raw
+          sha_filename=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}.raw.sha256
+          mv postgres-${{ inputs.flavor }}-x64-image.raw ${image_filename}
+          sha256sum ${image_filename} > ${sha_filename}
+          echo "### Image (x64)" >> $GITHUB_STEP_SUMMARY
+          du -h ${image_filename} >> $GITHUB_STEP_SUMMARY
+          echo "### Image SHA256" >> $GITHUB_STEP_SUMMARY
+          cat ${sha_filename} >> $GITHUB_STEP_SUMMARY
 
       - name: Sleep
         if: ${{ inputs.sleep_minutes > 0 }}
@@ -77,30 +111,541 @@ jobs:
           echo "ssh runneradmin@$IPv4"
           sleep $((${{ inputs.sleep_minutes }} * 60))
 
-      - name: Upload
-        if: ${{ inputs.upload_image }}
+      - name: Upload to MinIO
+        if: ${{ inputs.upload_image && !inputs.build_only }}
         env:
           MC_HOST_ubicloud: ${{ secrets.MINIO_CONNECTION_STRING }}
         run: |
           image_filename=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}.raw
           sha_filename=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}.raw.sha256
 
-          mv postgres-vm-image.raw ${image_filename}
+          mc cp ./${image_filename} ubicloud/ubicloud-images/${image_filename}
+          mc cp ./${sha_filename} ubicloud/ubicloud-images/${sha_filename}
+
+      - name: Upload to R2
+        if: ${{ inputs.upload_r2 == true && !inputs.build_only }}
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          if [ -z "${R2_BUCKET}" ] || [ -z "${R2_ENDPOINT}" ]; then
+            echo "R2 secrets not configured, skipping R2 upload"
+            exit 0
+          fi
+
+          # Set up mc alias for R2
+          mc alias set r2 "${R2_ENDPOINT}" "${R2_ACCESS_KEY_ID}" "${R2_SECRET_ACCESS_KEY}"
+
+          image_filename=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}.raw
+          sha_filename=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}.raw.sha256
+
+          echo "Uploading to R2..."
+          mc cp ./${image_filename} r2/${R2_BUCKET}/${image_filename}
+          mc cp ./${sha_filename} r2/${R2_BUCKET}/${sha_filename}
+
+          echo "### R2 Upload" >> $GITHUB_STEP_SUMMARY
+          echo "Uploaded to R2" >> $GITHUB_STEP_SUMMARY
+
+      - name: Install AWS CLI
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        run: |
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip -q awscliv2.zip
+          sudo ./aws/install --update
+          aws --version
+
+      - name: Upload image to S3
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        id: s3_upload
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-west-2
+        run: |
+          image_filename=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}.raw
+          s3_bucket=${{ secrets.AWS_S3_BUCKET }}
+
+          echo "Uploading image to S3..."
+          aws s3 cp ./${image_filename} s3://${s3_bucket}/${image_filename}
+
+          echo "image_filename=${image_filename}" >> $GITHUB_OUTPUT
+          echo "s3_bucket=${s3_bucket}" >> $GITHUB_OUTPUT
+
+      - name: Import snapshot to AWS
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        id: import_snapshot
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-west-2
+        run: |
+          image_filename=${{ steps.s3_upload.outputs.image_filename }}
+          s3_bucket=${{ steps.s3_upload.outputs.s3_bucket }}
+
+          cat <<EOT > containers.json
+          {
+            "Description": "${image_filename}",
+            "Format": "raw",
+            "UserBucket": {
+              "S3Bucket": "${s3_bucket}",
+              "S3Key": "${image_filename}"
+            }
+          }
+          EOT
+
+          echo "Starting snapshot import..."
+          import_task_id=$(aws ec2 import-snapshot \
+            --description "${image_filename}" \
+            --disk-container file://containers.json \
+            --query "ImportTaskId" \
+            --output text)
+
+          echo "Import task ID: ${import_task_id}"
+          echo "import_task_id=${import_task_id}" >> $GITHUB_OUTPUT
+
+      - name: Wait for snapshot import completion
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        id: wait_snapshot
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-west-2
+        run: |
+          import_task_id=${{ steps.import_snapshot.outputs.import_task_id }}
+
+          while true; do
+            status=$(aws ec2 describe-import-snapshot-tasks \
+              --import-task-ids "${import_task_id}" \
+              --query "ImportSnapshotTasks[0].SnapshotTaskDetail.Status" \
+              --output text)
+            progress=$(aws ec2 describe-import-snapshot-tasks \
+              --import-task-ids "${import_task_id}" \
+              --query "ImportSnapshotTasks[0].SnapshotTaskDetail.Progress" \
+              --output text 2>/dev/null || echo "N/A")
+
+            echo "Status: ${status}, Progress: ${progress}%"
+
+            if [ "${status}" = "completed" ]; then
+              echo "Snapshot import completed successfully."
+              break
+            elif [ "${status}" = "cancelled" ] || [ "${status}" = "failed" ]; then
+              echo "Snapshot import failed!"
+              aws ec2 describe-import-snapshot-tasks --import-task-ids "${import_task_id}"
+              exit 1
+            fi
+
+            sleep 20
+          done
+
+          snapshot_id=$(aws ec2 describe-import-snapshot-tasks \
+            --import-task-ids "${import_task_id}" \
+            --query "ImportSnapshotTasks[0].SnapshotTaskDetail.SnapshotId" \
+            --output text)
+
+          echo "Snapshot ID: ${snapshot_id}"
+          echo "snapshot_id=${snapshot_id}" >> $GITHUB_OUTPUT
+
+      - name: Register AMI from snapshot
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        id: register_ami
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-west-2
+        run: |
+          ami_name=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}
+          snapshot_id=${{ steps.wait_snapshot.outputs.snapshot_id }}
+
+          ami_id=$(aws ec2 register-image \
+            --name "${ami_name}" \
+            --architecture x86_64 \
+            --virtualization-type hvm \
+            --ena-support \
+            --root-device-name /dev/sda1 \
+            --block-device-mappings "[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"SnapshotId\":\"${snapshot_id}\",\"VolumeSize\":${{ inputs.image_resize_gb }}}}]" \
+            --query "ImageId" \
+            --output text)
+
+          echo "Registered AMI: ${ami_id}"
+          echo "ami_id=${ami_id}" >> $GITHUB_OUTPUT
+
+          aws ec2 create-tags \
+            --resources ${ami_id} \
+            --tags Key=Name,Value=${ami_name} Key=Source,Value=postgres-vm-images Key=Architecture,Value=x64
+
+          echo "### AWS AMI (x64)" >> $GITHUB_STEP_SUMMARY
+          echo "AMI ID: ${ami_id}" >> $GITHUB_STEP_SUMMARY
+          echo "AMI Name: ${ami_name}" >> $GITHUB_STEP_SUMMARY
+          echo "Architecture: x86_64" >> $GITHUB_STEP_SUMMARY
+          echo "Snapshot ID: ${snapshot_id}" >> $GITHUB_STEP_SUMMARY
+          echo "Region: us-west-2" >> $GITHUB_STEP_SUMMARY
+
+      - name: Copy AMI to additional regions
+        if: ${{ inputs.upload_aws_ami && inputs.aws_ami_regions != '' && !inputs.build_only }}
+        id: copy_ami
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-west-2
+        run: |
+          ami_id=${{ steps.register_ami.outputs.ami_id }}
+          ami_name=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}
+          regions="${{ inputs.aws_ami_regions }}"
+
+          echo "Copying AMI ${ami_id} to additional regions: ${regions}"
+          echo "### AMI Copies (x64)" >> $GITHUB_STEP_SUMMARY
+
+          # Store all AMI IDs for making public later
+          all_ami_ids="us-west-2:${ami_id}"
+
+          IFS=',' read -ra REGION_ARRAY <<< "$regions"
+          for region in "${REGION_ARRAY[@]}"; do
+            region=$(echo "$region" | xargs)
+            echo "Copying to ${region}..."
+
+            copied_ami_id=$(aws ec2 copy-image \
+              --source-region us-west-2 \
+              --source-image-id "${ami_id}" \
+              --name "${ami_name}" \
+              --region "${region}" \
+              --query "ImageId" \
+              --output text)
+
+            echo "Copied AMI to ${region}: ${copied_ami_id}"
+            echo "- ${region}: ${copied_ami_id}" >> $GITHUB_STEP_SUMMARY
+            all_ami_ids="${all_ami_ids},${region}:${copied_ami_id}"
+
+            aws ec2 create-tags \
+              --resources ${copied_ami_id} \
+              --tags Key=Name,Value=${ami_name} Key=Source,Value=postgres-vm-images Key=Architecture,Value=x64 \
+              --region "${region}"
+          done
+
+          echo "all_ami_ids=${all_ami_ids}" >> $GITHUB_OUTPUT
+
+      - name: Wait for AMI copies and make public
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          ami_id=${{ steps.register_ami.outputs.ami_id }}
+          all_ami_ids="${{ steps.copy_ami.outputs.all_ami_ids }}"
+
+          # If no copies were made, just use the source AMI
+          if [ -z "$all_ami_ids" ]; then
+            all_ami_ids="us-west-2:${ami_id}"
+          fi
+
+          echo "Waiting for AMIs to become available and making them public..."
+          echo "### Public AMIs (x64)" >> $GITHUB_STEP_SUMMARY
+
+          IFS=',' read -ra AMI_ARRAY <<< "$all_ami_ids"
+          for entry in "${AMI_ARRAY[@]}"; do
+            region=$(echo "$entry" | cut -d: -f1)
+            ami=$(echo "$entry" | cut -d: -f2)
+
+            echo "Waiting for ${ami} in ${region}..."
+
+            # Wait for AMI to be available (max 10 minutes)
+            for i in {1..30}; do
+              state=$(aws ec2 describe-images --image-ids "${ami}" --region "${region}" --query 'Images[0].State' --output text 2>/dev/null || echo "pending")
+              if [ "$state" = "available" ]; then
+                echo "AMI ${ami} is available in ${region}"
+                break
+              fi
+              echo "  State: ${state}, waiting..."
+              sleep 20
+            done
+
+            # Make AMI public
+            echo "Making ${ami} public in ${region}..."
+            aws ec2 modify-image-attribute \
+              --image-id "${ami}" \
+              --launch-permission "Add=[{Group=all}]" \
+              --region "${region}"
+
+            echo "- ${region}: ${ami} (public)" >> $GITHUB_STEP_SUMMARY
+          done
+
+      - name: Clean up S3
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        continue-on-error: true
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-west-2
+        run: |
+          echo "Cleaning up S3..."
+          aws s3 rm s3://${{ steps.s3_upload.outputs.s3_bucket }}/${{ steps.s3_upload.outputs.image_filename }}
+
+  # arm64 build - runs when build_arm64 is true OR when AWS AMI is selected AND flavor is standard
+  build-arm64:
+    name: Build postgres-${{ inputs.flavor }}-ubuntu-2204-arm64-${{ inputs.image_suffix }}
+    runs-on: ubicloud-standard-16-arm-ubuntu-2204
+    if: ${{ inputs.build_arm64 || (inputs.upload_aws_ami && inputs.flavor == 'standard' && !inputs.build_only) }}
+    steps:
+      - name: Print inputs
+        run: |
+          echo "Inputs: ${{ toJSON(github.event.inputs) }}"
+          echo "Architecture: arm64"
+
+      - name: Check out code
+        uses: actions/checkout@v3
+
+      - name: Build image
+        run: |
+          sudo ./build.sh ${{ inputs.flavor }} ${{ inputs.image_resize_gb }}
+
+      - name: Set image name output
+        id: set_image_name
+        run: |
+          image_name=postgres-ubuntu-2204-arm64-${{ inputs.image_suffix }}
+          echo "$image_name"
+          echo "IMAGE_NAME=$image_name" >> $GITHUB_OUTPUT
+
+      - name: Rename image file
+        run: |
+          image_filename=${{ steps.set_image_name.outputs.IMAGE_NAME }}.raw
+          sha_filename=${{ steps.set_image_name.outputs.IMAGE_NAME }}.raw.sha256
+          mv postgres-standard-arm64-image.raw ${image_filename}
           sha256sum ${image_filename} > ${sha_filename}
-
-          echo "### Image" >> $GITHUB_STEP_SUMMARY
+          echo "### Image (arm64)" >> $GITHUB_STEP_SUMMARY
           du -h ${image_filename} >> $GITHUB_STEP_SUMMARY
-
           echo "### Image SHA256" >> $GITHUB_STEP_SUMMARY
           cat ${sha_filename} >> $GITHUB_STEP_SUMMARY
 
-          echo "### PostgreSQL Versions" >> $GITHUB_STEP_SUMMARY
-          echo "PostgreSQL 16, 17, 18 (packages cached)" >> $GITHUB_STEP_SUMMARY
+      - name: Install AWS CLI
+        if: ${{ !inputs.build_only }}
+        run: |
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o "awscliv2.zip"
+          unzip -q awscliv2.zip
+          sudo ./aws/install --update
+          aws --version
 
-          echo "### Monitoring Stack" >> $GITHUB_STEP_SUMMARY
-          echo "- Prometheus v2.53.0" >> $GITHUB_STEP_SUMMARY
-          echo "- Node Exporter v1.8.1" >> $GITHUB_STEP_SUMMARY
-          echo "- Postgres Exporter v0.15.0" >> $GITHUB_STEP_SUMMARY
+      - name: Upload image to S3
+        if: ${{ !inputs.build_only }}
+        id: s3_upload
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-west-2
+        run: |
+          image_filename=${{ steps.set_image_name.outputs.IMAGE_NAME }}.raw
+          s3_bucket=${{ secrets.AWS_S3_BUCKET }}
 
-          mc cp ./${image_filename} ubicloud/ubicloud-images/${image_filename}
-          mc cp ./${sha_filename} ubicloud/ubicloud-images/${sha_filename}
+          echo "Uploading image to S3..."
+          aws s3 cp ./${image_filename} s3://${s3_bucket}/${image_filename}
+
+          echo "image_filename=${image_filename}" >> $GITHUB_OUTPUT
+          echo "s3_bucket=${s3_bucket}" >> $GITHUB_OUTPUT
+
+      - name: Import snapshot to AWS
+        if: ${{ !inputs.build_only }}
+        id: import_snapshot
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-west-2
+        run: |
+          image_filename=${{ steps.s3_upload.outputs.image_filename }}
+          s3_bucket=${{ steps.s3_upload.outputs.s3_bucket }}
+
+          cat <<EOT > containers.json
+          {
+            "Description": "${image_filename}",
+            "Format": "raw",
+            "UserBucket": {
+              "S3Bucket": "${s3_bucket}",
+              "S3Key": "${image_filename}"
+            }
+          }
+          EOT
+
+          echo "Starting snapshot import..."
+          import_task_id=$(aws ec2 import-snapshot \
+            --description "${image_filename}" \
+            --disk-container file://containers.json \
+            --query "ImportTaskId" \
+            --output text)
+
+          echo "Import task ID: ${import_task_id}"
+          echo "import_task_id=${import_task_id}" >> $GITHUB_OUTPUT
+
+      - name: Wait for snapshot import completion
+        if: ${{ !inputs.build_only }}
+        id: wait_snapshot
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-west-2
+        run: |
+          import_task_id=${{ steps.import_snapshot.outputs.import_task_id }}
+
+          while true; do
+            status=$(aws ec2 describe-import-snapshot-tasks \
+              --import-task-ids "${import_task_id}" \
+              --query "ImportSnapshotTasks[0].SnapshotTaskDetail.Status" \
+              --output text)
+            progress=$(aws ec2 describe-import-snapshot-tasks \
+              --import-task-ids "${import_task_id}" \
+              --query "ImportSnapshotTasks[0].SnapshotTaskDetail.Progress" \
+              --output text 2>/dev/null || echo "N/A")
+
+            echo "Status: ${status}, Progress: ${progress}%"
+
+            if [ "${status}" = "completed" ]; then
+              echo "Snapshot import completed successfully."
+              break
+            elif [ "${status}" = "cancelled" ] || [ "${status}" = "failed" ]; then
+              echo "Snapshot import failed!"
+              aws ec2 describe-import-snapshot-tasks --import-task-ids "${import_task_id}"
+              exit 1
+            fi
+
+            sleep 20
+          done
+
+          snapshot_id=$(aws ec2 describe-import-snapshot-tasks \
+            --import-task-ids "${import_task_id}" \
+            --query "ImportSnapshotTasks[0].SnapshotTaskDetail.SnapshotId" \
+            --output text)
+
+          echo "Snapshot ID: ${snapshot_id}"
+          echo "snapshot_id=${snapshot_id}" >> $GITHUB_OUTPUT
+
+      - name: Register AMI from snapshot
+        if: ${{ !inputs.build_only }}
+        id: register_ami
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-west-2
+        run: |
+          ami_name=${{ steps.set_image_name.outputs.IMAGE_NAME }}
+          snapshot_id=${{ steps.wait_snapshot.outputs.snapshot_id }}
+
+          ami_id=$(aws ec2 register-image \
+            --name "${ami_name}" \
+            --architecture arm64 \
+            --virtualization-type hvm \
+            --ena-support \
+            --root-device-name /dev/sda1 \
+            --block-device-mappings "[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"SnapshotId\":\"${snapshot_id}\",\"VolumeSize\":${{ inputs.image_resize_gb }}}}]" \
+            --query "ImageId" \
+            --output text)
+
+          echo "Registered AMI: ${ami_id}"
+          echo "ami_id=${ami_id}" >> $GITHUB_OUTPUT
+
+          aws ec2 create-tags \
+            --resources ${ami_id} \
+            --tags Key=Name,Value=${ami_name} Key=Source,Value=postgres-vm-images Key=Architecture,Value=arm64
+
+          echo "### AWS AMI (arm64)" >> $GITHUB_STEP_SUMMARY
+          echo "AMI ID: ${ami_id}" >> $GITHUB_STEP_SUMMARY
+          echo "AMI Name: ${ami_name}" >> $GITHUB_STEP_SUMMARY
+          echo "Architecture: arm64" >> $GITHUB_STEP_SUMMARY
+          echo "Snapshot ID: ${snapshot_id}" >> $GITHUB_STEP_SUMMARY
+          echo "Region: us-west-2" >> $GITHUB_STEP_SUMMARY
+
+      - name: Copy AMI to additional regions
+        if: ${{ inputs.aws_ami_regions != '' && !inputs.build_only }}
+        id: copy_ami
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-west-2
+        run: |
+          ami_id=${{ steps.register_ami.outputs.ami_id }}
+          ami_name=${{ steps.set_image_name.outputs.IMAGE_NAME }}
+          regions="${{ inputs.aws_ami_regions }}"
+
+          echo "Copying AMI ${ami_id} to additional regions: ${regions}"
+          echo "### AMI Copies (arm64)" >> $GITHUB_STEP_SUMMARY
+
+          # Store all AMI IDs for making public later
+          all_ami_ids="us-west-2:${ami_id}"
+
+          IFS=',' read -ra REGION_ARRAY <<< "$regions"
+          for region in "${REGION_ARRAY[@]}"; do
+            region=$(echo "$region" | xargs)
+            echo "Copying to ${region}..."
+
+            copied_ami_id=$(aws ec2 copy-image \
+              --source-region us-west-2 \
+              --source-image-id "${ami_id}" \
+              --name "${ami_name}" \
+              --region "${region}" \
+              --query "ImageId" \
+              --output text)
+
+            echo "Copied AMI to ${region}: ${copied_ami_id}"
+            echo "- ${region}: ${copied_ami_id}" >> $GITHUB_STEP_SUMMARY
+            all_ami_ids="${all_ami_ids},${region}:${copied_ami_id}"
+
+            aws ec2 create-tags \
+              --resources ${copied_ami_id} \
+              --tags Key=Name,Value=${ami_name} Key=Source,Value=postgres-vm-images Key=Architecture,Value=arm64 \
+              --region "${region}"
+          done
+
+          echo "all_ami_ids=${all_ami_ids}" >> $GITHUB_OUTPUT
+
+      - name: Wait for AMI copies and make public
+        if: ${{ !inputs.build_only }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          ami_id=${{ steps.register_ami.outputs.ami_id }}
+          all_ami_ids="${{ steps.copy_ami.outputs.all_ami_ids }}"
+
+          # If no copies were made, just use the source AMI
+          if [ -z "$all_ami_ids" ]; then
+            all_ami_ids="us-west-2:${ami_id}"
+          fi
+
+          echo "Waiting for AMIs to become available and making them public..."
+          echo "### Public AMIs (arm64)" >> $GITHUB_STEP_SUMMARY
+
+          IFS=',' read -ra AMI_ARRAY <<< "$all_ami_ids"
+          for entry in "${AMI_ARRAY[@]}"; do
+            region=$(echo "$entry" | cut -d: -f1)
+            ami=$(echo "$entry" | cut -d: -f2)
+
+            echo "Waiting for ${ami} in ${region}..."
+
+            # Wait for AMI to be available (max 10 minutes)
+            for i in {1..30}; do
+              state=$(aws ec2 describe-images --image-ids "${ami}" --region "${region}" --query 'Images[0].State' --output text 2>/dev/null || echo "pending")
+              if [ "$state" = "available" ]; then
+                echo "AMI ${ami} is available in ${region}"
+                break
+              fi
+              echo "  State: ${state}, waiting..."
+              sleep 20
+            done
+
+            # Make AMI public
+            echo "Making ${ami} public in ${region}..."
+            aws ec2 modify-image-attribute \
+              --image-id "${ami}" \
+              --launch-permission "Add=[{Group=all}]" \
+              --region "${region}"
+
+            echo "- ${region}: ${ami} (public)" >> $GITHUB_STEP_SUMMARY
+          done
+
+      - name: Clean up S3
+        if: ${{ !inputs.build_only }}
+        continue-on-error: true
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-west-2
+        run: |
+          echo "Cleaning up S3..."
+          aws s3 rm s3://${{ steps.s3_upload.outputs.s3_bucket }}/${{ steps.s3_upload.outputs.image_filename }}
