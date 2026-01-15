@@ -1,0 +1,16 @@
+[Unit]
+Description=WAL-G Daemon
+Documentation=https://github.com/wal-g/wal-g
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=postgres
+Group=postgres
+Type=simple
+EnvironmentFile=/etc/postgresql/wal-g.env
+ExecStart=/usr/bin/wal-g daemon /tmp/wal-g
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

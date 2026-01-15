@@ -58,3 +58,5 @@ EOF
 
 # Update grub
 update-grub
+
+echo "=== Cleanup complete ==="
