@@ -1,0 +1,311 @@
+name: Cleanup Images
+
+on:
+  workflow_dispatch:
+    inputs:
+      flavor:
+        description: "Image flavor"
+        required: true
+        default: standard
+        type: choice
+        options:
+          - standard
+          - paradedb
+      image_suffix:
+        description: "Image version suffix to clean up (e.g., YYYYMMDD.X.Y)"
+        type: string
+        required: true
+      architecture:
+        description: "Architecture(s) to clean up"
+        required: true
+        default: both
+        type: choice
+        options:
+          - x64
+          - arm64
+          - both
+      cleanup_minio:
+        description: "Clean up from MinIO"
+        default: true
+        type: boolean
+      cleanup_r2:
+        description: "Clean up from Cloudflare R2"
+        default: true
+        type: boolean
+      cleanup_aws_ami:
+        description: "Clean up AWS AMIs (deregister + delete snapshots)"
+        default: true
+        type: boolean
+      aws_ami_regions:
+        description: "AWS regions to clean up AMIs from (comma-separated)"
+        type: string
+        default: "us-west-2,us-east-1,us-east-2,eu-west-1,ap-southeast-2"
+      dry_run:
+        description: "Dry run (check existence only, don't delete)"
+        default: false
+        type: boolean
+
+jobs:
+  cleanup:
+    name: Cleanup ${{ inputs.flavor }} images for ${{ inputs.image_suffix }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print inputs
+        run: |
+          echo "Inputs: ${{ toJSON(github.event.inputs) }}"
+          echo "Dry run: ${{ inputs.dry_run }}"
+
+      - name: Set image names
+        id: set_image_names
+        run: |
+          # Generate image names based on flavor and architecture
+          if [ "${{ inputs.flavor }}" = "standard" ]; then
+            x64_image_name="postgres-ubuntu-2204-x64-${{ inputs.image_suffix }}"
+            arm64_image_name="postgres-ubuntu-2204-arm64-${{ inputs.image_suffix }}"
+          else
+            x64_image_name="postgres-${{ inputs.flavor }}-ubuntu-2204-x64-${{ inputs.image_suffix }}"
+            arm64_image_name="postgres-${{ inputs.flavor }}-ubuntu-2204-arm64-${{ inputs.image_suffix }}"
+          fi
+
+          echo "x64_image_name=${x64_image_name}" >> $GITHUB_OUTPUT
+          echo "arm64_image_name=${arm64_image_name}" >> $GITHUB_OUTPUT
+
+          echo "### Target Images" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.architecture }}" = "x64" ] || [ "${{ inputs.architecture }}" = "both" ]; then
+            echo "- x64: ${x64_image_name}" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "${{ inputs.architecture }}" = "arm64" ] || [ "${{ inputs.architecture }}" = "both" ]; then
+            echo "- arm64: ${arm64_image_name}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Install MinIO client
+        if: ${{ inputs.cleanup_minio || inputs.cleanup_r2 }}
+        run: |
+          curl -sL https://dl.min.io/client/mc/release/linux-amd64/mc -o mc
+          sudo mv mc /usr/bin/mc
+          sudo chmod +x /usr/bin/mc
+          mc --version
+
+      - name: Set MinIO root certificates
+        if: ${{ inputs.cleanup_minio }}
+        run: |
+          mkdir -p ~/.mc/certs/CAs
+          cat <<EOT > ~/.mc/certs/CAs/ubicloud_images_blob_storage_certs.crt
+          ${{ secrets.MINIO_ROOT_CERTIFICATES }}
+          EOT
+
+      - name: Cleanup MinIO
+        if: ${{ inputs.cleanup_minio }}
+        env:
+          MC_HOST_ubicloud: ${{ secrets.MINIO_CONNECTION_STRING }}
+        run: |
+          echo "### MinIO Cleanup" >> $GITHUB_STEP_SUMMARY
+
+          cleanup_file() {
+            local image_name=$1
+            local arch=$2
+            local raw_file="${image_name}.raw"
+            local sha_file="${image_name}.raw.sha256"
+
+            echo "Checking MinIO for ${arch} image: ${image_name}"
+
+            # Check if raw file exists
+            if mc stat "ubicloud/ubicloud-images/${raw_file}" &>/dev/null; then
+              echo "  Found: ${raw_file}"
+              if [ "${{ inputs.dry_run }}" = "true" ]; then
+                echo "  [DRY RUN] Would delete: ${raw_file}"
+                echo "- [DRY RUN] Would delete ${arch}: ${raw_file}" >> $GITHUB_STEP_SUMMARY
+              else
+                mc rm "ubicloud/ubicloud-images/${raw_file}"
+                echo "  Deleted: ${raw_file}"
+                echo "- Deleted ${arch}: ${raw_file}" >> $GITHUB_STEP_SUMMARY
+              fi
+            else
+              echo "  Not found: ${raw_file}"
+              echo "- Not found ${arch}: ${raw_file}" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            # Check if sha256 file exists
+            if mc stat "ubicloud/ubicloud-images/${sha_file}" &>/dev/null; then
+              echo "  Found: ${sha_file}"
+              if [ "${{ inputs.dry_run }}" = "true" ]; then
+                echo "  [DRY RUN] Would delete: ${sha_file}"
+                echo "- [DRY RUN] Would delete ${arch}: ${sha_file}" >> $GITHUB_STEP_SUMMARY
+              else
+                mc rm "ubicloud/ubicloud-images/${sha_file}"
+                echo "  Deleted: ${sha_file}"
+                echo "- Deleted ${arch}: ${sha_file}" >> $GITHUB_STEP_SUMMARY
+              fi
+            else
+              echo "  Not found: ${sha_file}"
+              echo "- Not found ${arch}: ${sha_file}" >> $GITHUB_STEP_SUMMARY
+            fi
+          }
+
+          if [ "${{ inputs.architecture }}" = "x64" ] || [ "${{ inputs.architecture }}" = "both" ]; then
+            cleanup_file "${{ steps.set_image_names.outputs.x64_image_name }}" "x64"
+          fi
+
+          if [ "${{ inputs.architecture }}" = "arm64" ] || [ "${{ inputs.architecture }}" = "both" ]; then
+            cleanup_file "${{ steps.set_image_names.outputs.arm64_image_name }}" "arm64"
+          fi
+
+      - name: Cleanup R2
+        if: ${{ inputs.cleanup_r2 }}
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          echo "### R2 Cleanup" >> $GITHUB_STEP_SUMMARY
+
+          if [ -z "${R2_BUCKET}" ] || [ -z "${R2_ENDPOINT}" ]; then
+            echo "R2 secrets not configured, skipping R2 cleanup"
+            echo "- R2 secrets not configured, skipped" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          # Set up mc alias for R2
+          mc alias set r2 "${R2_ENDPOINT}" "${R2_ACCESS_KEY_ID}" "${R2_SECRET_ACCESS_KEY}"
+
+          cleanup_file() {
+            local image_name=$1
+            local arch=$2
+            local raw_file="${image_name}.raw"
+            local sha_file="${image_name}.raw.sha256"
+
+            echo "Checking R2 for ${arch} image: ${image_name}"
+
+            # Check if raw file exists
+            if mc stat "r2/${R2_BUCKET}/${raw_file}" &>/dev/null; then
+              echo "  Found: ${raw_file}"
+              if [ "${{ inputs.dry_run }}" = "true" ]; then
+                echo "  [DRY RUN] Would delete: ${raw_file}"
+                echo "- [DRY RUN] Would delete ${arch}: ${raw_file}" >> $GITHUB_STEP_SUMMARY
+              else
+                mc rm "r2/${R2_BUCKET}/${raw_file}"
+                echo "  Deleted: ${raw_file}"
+                echo "- Deleted ${arch}: ${raw_file}" >> $GITHUB_STEP_SUMMARY
+              fi
+            else
+              echo "  Not found: ${raw_file}"
+              echo "- Not found ${arch}: ${raw_file}" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            # Check if sha256 file exists
+            if mc stat "r2/${R2_BUCKET}/${sha_file}" &>/dev/null; then
+              echo "  Found: ${sha_file}"
+              if [ "${{ inputs.dry_run }}" = "true" ]; then
+                echo "  [DRY RUN] Would delete: ${sha_file}"
+                echo "- [DRY RUN] Would delete ${arch}: ${sha_file}" >> $GITHUB_STEP_SUMMARY
+              else
+                mc rm "r2/${R2_BUCKET}/${sha_file}"
+                echo "  Deleted: ${sha_file}"
+                echo "- Deleted ${arch}: ${sha_file}" >> $GITHUB_STEP_SUMMARY
+              fi
+            else
+              echo "  Not found: ${sha_file}"
+              echo "- Not found ${arch}: ${sha_file}" >> $GITHUB_STEP_SUMMARY
+            fi
+          }
+
+          if [ "${{ inputs.architecture }}" = "x64" ] || [ "${{ inputs.architecture }}" = "both" ]; then
+            cleanup_file "${{ steps.set_image_names.outputs.x64_image_name }}" "x64"
+          fi
+
+          if [ "${{ inputs.architecture }}" = "arm64" ] || [ "${{ inputs.architecture }}" = "both" ]; then
+            cleanup_file "${{ steps.set_image_names.outputs.arm64_image_name }}" "arm64"
+          fi
+
+      - name: Install AWS CLI
+        if: ${{ inputs.cleanup_aws_ami }}
+        run: |
+          curl -sL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip -q awscliv2.zip
+          sudo ./aws/install --update
+          aws --version
+
+      - name: Cleanup AWS AMIs
+        if: ${{ inputs.cleanup_aws_ami }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          echo "### AWS AMI Cleanup" >> $GITHUB_STEP_SUMMARY
+
+          regions="${{ inputs.aws_ami_regions }}"
+
+          cleanup_ami() {
+            local ami_name=$1
+            local arch=$2
+            local region=$3
+
+            echo "Checking ${region} for ${arch} AMI: ${ami_name}"
+
+            # Find AMI by name
+            ami_info=$(aws ec2 describe-images \
+              --region "${region}" \
+              --owners self \
+              --filters "Name=name,Values=${ami_name}" \
+              --query "Images[0].[ImageId,BlockDeviceMappings[0].Ebs.SnapshotId]" \
+              --output text 2>/dev/null || echo "None None")
+
+            ami_id=$(echo "${ami_info}" | awk '{print $1}')
+            snapshot_id=$(echo "${ami_info}" | awk '{print $2}')
+
+            if [ "${ami_id}" = "None" ] || [ -z "${ami_id}" ]; then
+              echo "  Not found in ${region}"
+              echo "- ${region} ${arch}: Not found" >> $GITHUB_STEP_SUMMARY
+              return
+            fi
+
+            echo "  Found AMI: ${ami_id} (snapshot: ${snapshot_id})"
+
+            if [ "${{ inputs.dry_run }}" = "true" ]; then
+              echo "  [DRY RUN] Would deregister AMI: ${ami_id}"
+              echo "  [DRY RUN] Would delete snapshot: ${snapshot_id}"
+              echo "- [DRY RUN] ${region} ${arch}: Would delete AMI ${ami_id} + snapshot ${snapshot_id}" >> $GITHUB_STEP_SUMMARY
+            else
+              # Deregister AMI
+              echo "  Deregistering AMI: ${ami_id}"
+              aws ec2 deregister-image \
+                --region "${region}" \
+                --image-id "${ami_id}"
+
+              # Delete snapshot if it exists
+              if [ "${snapshot_id}" != "None" ] && [ -n "${snapshot_id}" ]; then
+                echo "  Deleting snapshot: ${snapshot_id}"
+                aws ec2 delete-snapshot \
+                  --region "${region}" \
+                  --snapshot-id "${snapshot_id}" || echo "  Warning: Failed to delete snapshot ${snapshot_id}"
+              fi
+
+              echo "  Cleaned up AMI ${ami_id} and snapshot ${snapshot_id} in ${region}"
+              echo "- ${region} ${arch}: Deleted AMI ${ami_id} + snapshot ${snapshot_id}" >> $GITHUB_STEP_SUMMARY
+            fi
+          }
+
+          # Process each region
+          IFS=',' read -ra REGION_ARRAY <<< "$regions"
+          for region in "${REGION_ARRAY[@]}"; do
+            region=$(echo "$region" | xargs)
+
+            if [ "${{ inputs.architecture }}" = "x64" ] || [ "${{ inputs.architecture }}" = "both" ]; then
+              cleanup_ami "${{ steps.set_image_names.outputs.x64_image_name }}" "x64" "${region}"
+            fi
+
+            if [ "${{ inputs.architecture }}" = "arm64" ] || [ "${{ inputs.architecture }}" = "both" ]; then
+              cleanup_ami "${{ steps.set_image_names.outputs.arm64_image_name }}" "arm64" "${region}"
+            fi
+          done
+
+      - name: Summary
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "**This was a dry run. No files were actually deleted.**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Cleanup complete.**" >> $GITHUB_STEP_SUMMARY
+          fi
