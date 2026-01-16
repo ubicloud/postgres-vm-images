@@ -19,35 +19,30 @@ on:
         required: true
         default: 8
         type: number
-      upload_image:
-        description: "Upload image to MinIO cluster"
-        default: false
-        type: boolean
-      upload_r2:
-        description: "Upload to R2"
-        default: false
-        type: boolean
-      upload_aws_ami:
-        description: "Create AWS AMI"
-        default: false
-        type: boolean
-      aws_ami_regions:
-        description: "Additional regions to copy AMI to (comma-separated)"
-        type: string
-        default: "us-east-1,us-east-2,eu-west-1,ap-southeast-2"
-      sleep_minutes:
-        description: "Runner sleep in minutes. 0 for no sleep"
-        required: true
-        type: number
-        default: 0
       build_only:
-        description: "Build only (skip all uploads) - useful for testing"
+        description: "⚡ Build only (skip all uploads) - for testing"
         default: false
         type: boolean
       build_arm64:
-        description: "Build ARM64 image (in addition to x64)"
+        description: "Build ARM64 image (recommended if uploading to AWS AMI)"
         default: false
         type: boolean
+      upload_image:
+        description: "📤 Upload to MinIO (ignored if build_only)"
+        default: false
+        type: boolean
+      upload_r2:
+        description: "📤 Upload to R2 (ignored if build_only)"
+        default: false
+        type: boolean
+      upload_aws_ami:
+        description: "📤 Create AWS AMI (ignored if build_only)"
+        default: false
+        type: boolean
+      aws_ami_regions:
+        description: "AWS regions to copy AMI to (comma-separated)"
+        type: string
+        default: "us-east-1,us-east-2,eu-west-1,ap-southeast-2"
 
 jobs:
   # x64 build - always runs
@@ -102,14 +97,6 @@ jobs:
           du -h ${image_filename} >> $GITHUB_STEP_SUMMARY
           echo "### Image SHA256" >> $GITHUB_STEP_SUMMARY
           cat ${sha_filename} >> $GITHUB_STEP_SUMMARY
-
-      - name: Sleep
-        if: ${{ inputs.sleep_minutes > 0 }}
-        run: |
-          sudo sh -c 'echo "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBF8s1PMJQfyKMrbi408/aFNXt1Ey14NIftFOtDtm2qo4JXU0dOEA5s7D8ADlskroMXtLQyPJjePHDn1OCNE/A8c= dev+ben@ubicloud.com" >> /home/runneradmin/.ssh/authorized_keys'
-          IPv4=$(curl -sL --ipv4 ifconfig.me)
-          echo "ssh runneradmin@$IPv4"
-          sleep $((${{ inputs.sleep_minutes }} * 60))
 
       - name: Upload to MinIO
         if: ${{ inputs.upload_image && !inputs.build_only }}

@@ -25,15 +25,15 @@ on:
           - arm64
           - both
       cleanup_minio:
-        description: "Clean up from MinIO"
+        description: "🗑️ Clean up from MinIO"
         default: true
         type: boolean
       cleanup_r2:
-        description: "Clean up from Cloudflare R2"
+        description: "🗑️ Clean up from Cloudflare R2"
         default: true
         type: boolean
       cleanup_aws_ami:
-        description: "Clean up AWS AMIs (deregister + delete snapshots)"
+        description: "🗑️ Clean up AWS AMIs (deregister + delete snapshots)"
         default: true
         type: boolean
       aws_ami_regions:
@@ -41,7 +41,7 @@ on:
         type: string
         default: "us-west-2,us-east-1,us-east-2,eu-west-1,ap-southeast-2"
       dry_run:
-        description: "Dry run (check existence only, don't delete)"
+        description: "🔍 Dry run (check existence only, don't delete)"
         default: false
         type: boolean
 
