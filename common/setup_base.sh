@@ -3,6 +3,17 @@ set -uexo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
+echo "=== [setup_base.sh] Updating OpenSSH ==="
+
+# Update OpenSSH to address security vulnerabilities
+apt-get update -qq
+apt-get -qq -y satisfy 'openssh-server (>= 1:8.9p1-3ubuntu0.10)'
+
+echo "=== [setup_base.sh] Updating kernel ==="
+
+# Update to kernel 6.8.0-90-generic (Ubuntu 22.04's latest HWE kernel)
+apt-get install -y linux-image-6.8.0-90-generic linux-headers-6.8.0-90-generic linux-tools-6.8.0-90-generic
+
 echo "=== [setup_base.sh] Configuring PostgreSQL repositories ==="
 
 # Add PostgreSQL repository
