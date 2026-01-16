@@ -371,7 +371,7 @@ jobs:
   # arm64 build - runs when build_arm64 is true OR when AWS AMI is selected AND flavor is standard
   build-arm64:
     name: Build postgres-${{ inputs.flavor }}-ubuntu-2204-arm64-${{ inputs.image_suffix }}
-    runs-on: ubicloud-standard-16-arm-ubuntu-2204
+    runs-on: ubicloud-standard-4-arm-ubuntu-2204
     if: ${{ inputs.build_arm64 || (inputs.upload_aws_ami && inputs.flavor == 'standard' && !inputs.build_only) }}
     steps:
       - name: Print inputs
