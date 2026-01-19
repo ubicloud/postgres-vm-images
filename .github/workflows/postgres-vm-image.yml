@@ -43,12 +43,20 @@ on:
         description: "AWS regions to copy AMI to (comma-separated)"
         type: string
         default: "us-east-1,us-east-2,eu-west-1,ap-southeast-2"
+      create_ubicloud_pr:
+        description: "🔄 Create PR to ubicloud/ubicloud with updated image versions"
+        default: false
+        type: boolean
 
 jobs:
   # x64 build - always runs
   build-x64:
     name: Build postgres-${{ inputs.flavor }}-ubuntu-2204-x64-${{ inputs.image_suffix }}
     runs-on: ubicloud-standard-4-ubuntu-2204
+    outputs:
+      sha256: ${{ steps.compute_sha.outputs.sha256 }}
+      all_ami_ids: ${{ steps.copy_ami.outputs.all_ami_ids }}
+      source_ami_id: ${{ steps.register_ami.outputs.ami_id }}
     steps:
       - name: Print inputs
         run: |
@@ -87,12 +95,15 @@ jobs:
           echo "$image_name"
           echo "MINIO_IMAGE_NAME=$image_name" >> $GITHUB_OUTPUT
 
-      - name: Rename image file
+      - name: Rename image file and compute SHA256
+        id: compute_sha
         run: |
           image_filename=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}.raw
           sha_filename=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}.raw.sha256
           mv postgres-${{ inputs.flavor }}-x64-image.raw ${image_filename}
           sha256sum ${image_filename} > ${sha_filename}
+          sha256=$(cut -d' ' -f1 ${sha_filename})
+          echo "sha256=${sha256}" >> $GITHUB_OUTPUT
           echo "### Image (x64)" >> $GITHUB_STEP_SUMMARY
           du -h ${image_filename} >> $GITHUB_STEP_SUMMARY
           echo "### Image SHA256" >> $GITHUB_STEP_SUMMARY
@@ -373,6 +384,10 @@ jobs:
     name: Build postgres-${{ inputs.flavor }}-ubuntu-2204-arm64-${{ inputs.image_suffix }}
     runs-on: ubicloud-standard-4-arm-ubuntu-2204
     if: ${{ inputs.build_arm64 || (inputs.upload_aws_ami && inputs.flavor == 'standard' && !inputs.build_only) }}
+    outputs:
+      sha256: ${{ steps.compute_sha.outputs.sha256 }}
+      all_ami_ids: ${{ steps.copy_ami.outputs.all_ami_ids }}
+      source_ami_id: ${{ steps.register_ami.outputs.ami_id }}
     steps:
       - name: Print inputs
         run: |
@@ -393,12 +408,15 @@ jobs:
           echo "$image_name"
           echo "IMAGE_NAME=$image_name" >> $GITHUB_OUTPUT
 
-      - name: Rename image file
+      - name: Rename image file and compute SHA256
+        id: compute_sha
         run: |
           image_filename=${{ steps.set_image_name.outputs.IMAGE_NAME }}.raw
           sha_filename=${{ steps.set_image_name.outputs.IMAGE_NAME }}.raw.sha256
           mv postgres-standard-arm64-image.raw ${image_filename}
           sha256sum ${image_filename} > ${sha_filename}
+          sha256=$(cut -d' ' -f1 ${sha_filename})
+          echo "sha256=${sha256}" >> $GITHUB_OUTPUT
           echo "### Image (arm64)" >> $GITHUB_STEP_SUMMARY
           du -h ${image_filename} >> $GITHUB_STEP_SUMMARY
           echo "### Image SHA256" >> $GITHUB_STEP_SUMMARY
@@ -636,3 +654,186 @@ jobs:
         run: |
           echo "Cleaning up S3..."
           aws s3 rm s3://${{ steps.s3_upload.outputs.s3_bucket }}/${{ steps.s3_upload.outputs.image_filename }}
+
+  # Create PR to ubicloud/ubicloud with updated image versions
+  create-ubicloud-pr:
+    name: Create PR to ubicloud/ubicloud
+    runs-on: ubicloud-standard-2-ubuntu-2204
+    needs: [build-x64, build-arm64]
+    if: ${{ always() && inputs.create_ubicloud_pr && !inputs.build_only && needs.build-x64.result == 'success' }}
+    steps:
+      - name: Collect build outputs
+        id: collect
+        run: |
+          # Determine image name for download_boot_image.rb
+          if [ "${{ inputs.flavor }}" = "standard" ]; then
+            image_name="postgres-ubuntu-2204"
+          else
+            image_name="postgres-${{ inputs.flavor }}-ubuntu-2204"
+          fi
+          echo "image_name=${image_name}" >> $GITHUB_OUTPUT
+          echo "version=${{ inputs.image_suffix }}" >> $GITHUB_OUTPUT
+
+          # x64 data
+          echo "x64_sha256=${{ needs.build-x64.outputs.sha256 }}" >> $GITHUB_OUTPUT
+
+          # arm64 data (may be empty if arm64 job didn't run)
+          echo "arm64_sha256=${{ needs.build-arm64.outputs.sha256 }}" >> $GITHUB_OUTPUT
+
+          # AMI IDs
+          x64_amis="${{ needs.build-x64.outputs.all_ami_ids }}"
+          if [ -z "$x64_amis" ] && [ -n "${{ needs.build-x64.outputs.source_ami_id }}" ]; then
+            x64_amis="us-west-2:${{ needs.build-x64.outputs.source_ami_id }}"
+          fi
+          echo "x64_ami_ids=${x64_amis}" >> $GITHUB_OUTPUT
+
+          arm64_amis="${{ needs.build-arm64.outputs.all_ami_ids }}"
+          if [ -z "$arm64_amis" ] && [ -n "${{ needs.build-arm64.outputs.source_ami_id }}" ]; then
+            arm64_amis="us-west-2:${{ needs.build-arm64.outputs.source_ami_id }}"
+          fi
+          echo "arm64_ami_ids=${arm64_amis}" >> $GITHUB_OUTPUT
+
+      - name: Clone ubicloud/ubicloud
+        run: |
+          git clone --depth 1 https://github.com/ubicloud/ubicloud.git ubicloud
+
+      - name: Update download_boot_image.rb
+        run: |
+          cd ubicloud
+          image_name="${{ steps.collect.outputs.image_name }}"
+          version="${{ steps.collect.outputs.version }}"
+          x64_sha="${{ steps.collect.outputs.x64_sha256 }}"
+          arm64_sha="${{ steps.collect.outputs.arm64_sha256 }}"
+
+          # Find and replace existing entries for this image (update version AND sha)
+          # Pattern: ["image-name", "arch", "old-version"] => "old-sha",
+          if [ -n "$x64_sha" ]; then
+            # Replace the existing x64 entry with new version and sha
+            sed -i -E "s|\\[\"${image_name}\", \"x64\", \"[^\"]+\"\\] => \"[^\"]+\"|[\"${image_name}\", \"x64\", \"${version}\"] => \"${x64_sha}\"|" prog/download_boot_image.rb
+            echo "Updated x64 entry: ${image_name} -> ${version}"
+          fi
+
+          if [ -n "$arm64_sha" ]; then
+            # Replace the existing arm64 entry with new version and sha
+            sed -i -E "s|\\[\"${image_name}\", \"arm64\", \"[^\"]+\"\\] => \"[^\"]+\"|[\"${image_name}\", \"arm64\", \"${version}\"] => \"${arm64_sha}\"|" prog/download_boot_image.rb
+            echo "Updated arm64 entry: ${image_name} -> ${version}"
+          fi
+
+          # Show the changes
+          echo "=== Updated entries ==="
+          grep "${image_name}" prog/download_boot_image.rb || true
+
+      - name: Create migration file
+        run: |
+          cd ubicloud
+          timestamp=$(date +%Y%m%d%H%M%S)
+          migration_file="migrate/${timestamp}_update_pg_${{ inputs.flavor }}_amis.rb"
+
+          x64_amis="${{ steps.collect.outputs.x64_ami_ids }}"
+          arm64_amis="${{ steps.collect.outputs.arm64_ami_ids }}"
+
+          # Start the migration file
+          echo '# frozen_string_literal: true' > "${migration_file}"
+          echo '' >> "${migration_file}"
+          echo 'Sequel.migration do' >> "${migration_file}"
+          echo '  up do' >> "${migration_file}"
+          echo '    [' >> "${migration_file}"
+
+          # Collect all entries
+          entries=()
+
+          # Add x64 AMIs for each pg_version
+          if [ -n "$x64_amis" ]; then
+            IFS=',' read -ra AMI_ARRAY <<< "$x64_amis"
+            for entry in "${AMI_ARRAY[@]}"; do
+              region=$(echo "$entry" | cut -d: -f1)
+              ami=$(echo "$entry" | cut -d: -f2)
+              for pg_ver in 16 17 18; do
+                entries+=("      [\"${region}\", \"x64\", \"${pg_ver}\", \"${ami}\"]")
+              done
+            done
+          fi
+
+          # Add arm64 AMIs for each pg_version
+          if [ -n "$arm64_amis" ]; then
+            IFS=',' read -ra AMI_ARRAY <<< "$arm64_amis"
+            for entry in "${AMI_ARRAY[@]}"; do
+              region=$(echo "$entry" | cut -d: -f1)
+              ami=$(echo "$entry" | cut -d: -f2)
+              for pg_ver in 16 17 18; do
+                entries+=("      [\"${region}\", \"arm64\", \"${pg_ver}\", \"${ami}\"]")
+              done
+            done
+          fi
+
+          # Write entries with proper comma separation
+          total=${#entries[@]}
+          for i in "${!entries[@]}"; do
+            if [ $i -eq $((total - 1)) ]; then
+              echo "${entries[$i]}" >> "${migration_file}"
+            else
+              echo "${entries[$i]}," >> "${migration_file}"
+            fi
+          done
+
+          # Complete the migration file
+          echo '    ].each do |location_name, arch, pg_version, ami_id|' >> "${migration_file}"
+          echo '      from(:pg_aws_ami).insert(' >> "${migration_file}"
+          echo '        id: Sequel.lit("gen_random_ubid_uuid(474)"),' >> "${migration_file}"
+          echo '        aws_location_name: location_name,' >> "${migration_file}"
+          echo '        arch: arch,' >> "${migration_file}"
+          echo '        pg_version: pg_version,' >> "${migration_file}"
+          echo '        aws_ami_id: ami_id' >> "${migration_file}"
+          echo '      )' >> "${migration_file}"
+          echo '    end' >> "${migration_file}"
+          echo '  end' >> "${migration_file}"
+          echo '' >> "${migration_file}"
+          echo '  down do' >> "${migration_file}"
+          echo '    raise Sequel::Error, "Manual rollback required"' >> "${migration_file}"
+          echo '  end' >> "${migration_file}"
+          echo 'end' >> "${migration_file}"
+
+          echo "Created migration file: ${migration_file}"
+          cat "${migration_file}"
+
+      - name: Create Pull Request
+        env:
+          GH_TOKEN: ${{ secrets.UBICLOUD_REPO_PAT }}
+        run: |
+          cd ubicloud
+
+          # Configure git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Create branch
+          branch_name="update-postgres-${{ inputs.flavor }}-images-${{ inputs.image_suffix }}"
+          git checkout -b "${branch_name}"
+
+          # Commit changes
+          git add -A
+          git commit -m "Update postgres-${{ inputs.flavor }} images to ${{ inputs.image_suffix }}"
+
+          # Push and create PR
+          git push -u origin "${branch_name}"
+
+          gh pr create \
+            --title "Update postgres-${{ inputs.flavor }} images to ${{ inputs.image_suffix }}" \
+            --body "$(cat <<'EOF'
+          ## Summary
+          - Updates boot image SHA256 hashes in \`prog/download_boot_image.rb\`
+          - Adds migration to update AWS AMI IDs in \`pg_aws_ami\` table
+
+          ## Image Version
+          \`${{ inputs.image_suffix }}\`
+
+          ## Changes
+          - x64 SHA256: \`${{ steps.collect.outputs.x64_sha256 }}\`
+          - arm64 SHA256: \`${{ steps.collect.outputs.arm64_sha256 }}\`
+
+          🤖 Generated by [postgres-vm-images](https://github.com/ubicloud/postgres-vm-images) workflow
+          EOF
+          )"
+
+          echo "### PR Created" >> $GITHUB_STEP_SUMMARY
+          gh pr view --json url -q '.url' >> $GITHUB_STEP_SUMMARY
