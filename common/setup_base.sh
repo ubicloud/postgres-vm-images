@@ -14,6 +14,9 @@ echo "=== [setup_base.sh] Updating kernel ==="
 # Update to kernel 6.8.0-90-generic (Ubuntu 22.04's latest HWE kernel)
 apt-get install -y linux-image-6.8.0-90-generic linux-headers-6.8.0-90-generic linux-tools-6.8.0-90-generic
 
+echo "=== [setup_base.sh] Installing ruby-bundler ==="
+apt-get install -y ruby-bundler
+
 echo "=== [setup_base.sh] Configuring PostgreSQL repositories ==="
 
 # Add PostgreSQL repository
