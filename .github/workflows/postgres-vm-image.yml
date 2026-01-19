@@ -835,6 +835,8 @@ jobs:
           git push -u origin "${branch_name}"
 
           gh pr create \
+            --repo ubicloud/ubicloud \
+            --head "${branch_name}" \
             --title "Update postgres-${{ inputs.flavor }} images to ${{ inputs.image_suffix }}" \
             --body "$(cat <<'EOF'
           ## Summary
@@ -853,4 +855,4 @@ jobs:
           )"
 
           echo "### PR Created" >> $GITHUB_STEP_SUMMARY
-          gh pr view --json url -q '.url' >> $GITHUB_STEP_SUMMARY
+          gh pr view --repo ubicloud/ubicloud "${branch_name}" --json url -q '.url' >> $GITHUB_STEP_SUMMARY
