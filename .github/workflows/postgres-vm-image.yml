@@ -47,12 +47,17 @@ on:
         description: "🔄 Create PR to ubicloud/ubicloud with updated image versions"
         default: false
         type: boolean
+      test_pr_creation:
+        description: "🧪 TEST ONLY: Skip builds, use dummy values to test PR creation"
+        default: false
+        type: boolean
 
 jobs:
-  # x64 build - always runs
+  # x64 build - always runs (unless test_pr_creation is enabled)
   build-x64:
     name: Build postgres-${{ inputs.flavor }}-ubuntu-2204-x64-${{ inputs.image_suffix }}
     runs-on: ubicloud-standard-4-ubuntu-2204
+    if: ${{ !inputs.test_pr_creation }}
     outputs:
       sha256: ${{ steps.compute_sha.outputs.sha256 }}
       all_ami_ids: ${{ steps.copy_ami.outputs.all_ami_ids }}
@@ -383,7 +388,7 @@ jobs:
   build-arm64:
     name: Build postgres-${{ inputs.flavor }}-ubuntu-2204-arm64-${{ inputs.image_suffix }}
     runs-on: ubicloud-standard-4-arm-ubuntu-2204
-    if: ${{ inputs.build_arm64 || (inputs.upload_aws_ami && inputs.flavor == 'standard' && !inputs.build_only) }}
+    if: ${{ !inputs.test_pr_creation && (inputs.build_arm64 || (inputs.upload_aws_ami && inputs.flavor == 'standard' && !inputs.build_only)) }}
     outputs:
       sha256: ${{ steps.compute_sha.outputs.sha256 }}
       all_ami_ids: ${{ steps.copy_ami.outputs.all_ami_ids }}
@@ -660,7 +665,7 @@ jobs:
     name: Create PR to ubicloud/ubicloud
     runs-on: ubicloud-standard-2-ubuntu-2204
     needs: [build-x64, build-arm64]
-    if: ${{ always() && inputs.create_ubicloud_pr && !inputs.build_only && needs.build-x64.result == 'success' }}
+    if: ${{ always() && (inputs.test_pr_creation || (inputs.create_ubicloud_pr && !inputs.build_only && needs.build-x64.result == 'success')) }}
     steps:
       - name: Collect build outputs
         id: collect
@@ -674,24 +679,33 @@ jobs:
           echo "image_name=${image_name}" >> $GITHUB_OUTPUT
           echo "version=${{ inputs.image_suffix }}" >> $GITHUB_OUTPUT
 
-          # x64 data
-          echo "x64_sha256=${{ needs.build-x64.outputs.sha256 }}" >> $GITHUB_OUTPUT
+          # Check if running in test mode
+          if [ "${{ inputs.test_pr_creation }}" = "true" ]; then
+            echo "🧪 TEST MODE: Using dummy values"
+            echo "x64_sha256=dummy_x64_sha256_for_testing_0123456789abcdef" >> $GITHUB_OUTPUT
+            echo "arm64_sha256=dummy_arm64_sha256_for_testing_fedcba9876543210" >> $GITHUB_OUTPUT
+            echo "x64_ami_ids=us-west-2:ami-test-x64-uswest2,us-east-1:ami-test-x64-useast1" >> $GITHUB_OUTPUT
+            echo "arm64_ami_ids=us-west-2:ami-test-arm64-uswest2,us-east-1:ami-test-arm64-useast1" >> $GITHUB_OUTPUT
+          else
+            # x64 data
+            echo "x64_sha256=${{ needs.build-x64.outputs.sha256 }}" >> $GITHUB_OUTPUT
 
-          # arm64 data (may be empty if arm64 job didn't run)
-          echo "arm64_sha256=${{ needs.build-arm64.outputs.sha256 }}" >> $GITHUB_OUTPUT
+            # arm64 data (may be empty if arm64 job didn't run)
+            echo "arm64_sha256=${{ needs.build-arm64.outputs.sha256 }}" >> $GITHUB_OUTPUT
 
-          # AMI IDs
-          x64_amis="${{ needs.build-x64.outputs.all_ami_ids }}"
-          if [ -z "$x64_amis" ] && [ -n "${{ needs.build-x64.outputs.source_ami_id }}" ]; then
-            x64_amis="us-west-2:${{ needs.build-x64.outputs.source_ami_id }}"
+            # AMI IDs
+            x64_amis="${{ needs.build-x64.outputs.all_ami_ids }}"
+            if [ -z "$x64_amis" ] && [ -n "${{ needs.build-x64.outputs.source_ami_id }}" ]; then
+              x64_amis="us-west-2:${{ needs.build-x64.outputs.source_ami_id }}"
+            fi
+            echo "x64_ami_ids=${x64_amis}" >> $GITHUB_OUTPUT
+
+            arm64_amis="${{ needs.build-arm64.outputs.all_ami_ids }}"
+            if [ -z "$arm64_amis" ] && [ -n "${{ needs.build-arm64.outputs.source_ami_id }}" ]; then
+              arm64_amis="us-west-2:${{ needs.build-arm64.outputs.source_ami_id }}"
+            fi
+            echo "arm64_ami_ids=${arm64_amis}" >> $GITHUB_OUTPUT
           fi
-          echo "x64_ami_ids=${x64_amis}" >> $GITHUB_OUTPUT
-
-          arm64_amis="${{ needs.build-arm64.outputs.all_ami_ids }}"
-          if [ -z "$arm64_amis" ] && [ -n "${{ needs.build-arm64.outputs.source_ami_id }}" ]; then
-            arm64_amis="us-west-2:${{ needs.build-arm64.outputs.source_ami_id }}"
-          fi
-          echo "arm64_ami_ids=${arm64_amis}" >> $GITHUB_OUTPUT
 
       - name: Clone ubicloud/ubicloud
         run: |
