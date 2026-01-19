@@ -738,6 +738,7 @@ jobs:
           grep "${image_name}" prog/download_boot_image.rb || true
 
       - name: Create migration file
+        if: ${{ inputs.flavor == 'standard' }}
         run: |
           cd ubicloud
           timestamp=$(date +%Y%m%d)
