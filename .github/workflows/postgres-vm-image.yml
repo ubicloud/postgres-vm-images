@@ -746,6 +746,37 @@ jobs:
           x64_amis="${{ steps.collect.outputs.x64_ami_ids }}"
           arm64_amis="${{ steps.collect.outputs.arm64_ami_ids }}"
 
+          # Find old AMIs from previous migration files
+          declare -A old_amis
+          echo "=== Searching for existing AMIs in migration files ==="
+          for migration in $(ls -1 migrate/*.rb 2>/dev/null | sort); do
+            # Pattern 1: ["region", "arch", "pg_version", "ami"] - with pg_version
+            while IFS= read -r match; do
+              region=$(echo "$match" | sed -E 's/.*\["([^"]+)".*/\1/')
+              arch=$(echo "$match" | sed -E 's/.*",\s*"(x64|arm64)".*/\1/')
+              pg_ver=$(echo "$match" | sed -E 's/.*",\s*"(x64|arm64)",\s*"([0-9]+)".*/\2/')
+              ami=$(echo "$match" | sed -E 's/.*"(ami-[^"]+)".*/\1/')
+              if [[ "$ami" =~ ^ami- ]]; then
+                old_amis["${region}:${arch}:${pg_ver}"]="$ami"
+              fi
+            done < <(grep -oE '\["[^"]+",\s*"(x64|arm64)",\s*"[0-9]+",\s*"ami-[^"]+"\]' "$migration" 2>/dev/null || true)
+
+            # Pattern 2: ["region", "arch", "ami", "old_ami"] - without pg_version (applies to all versions)
+            while IFS= read -r match; do
+              region=$(echo "$match" | sed -E 's/.*\["([^"]+)".*/\1/')
+              arch=$(echo "$match" | sed -E 's/.*",\s*"(x64|arm64)".*/\1/')
+              ami=$(echo "$match" | sed -E 's/.*",\s*"(x64|arm64)",\s*"(ami-[^"]+)".*/\2/')
+              if [[ "$ami" =~ ^ami- ]]; then
+                # Apply to all pg_versions
+                for pg_ver in 16 17 18; do
+                  old_amis["${region}:${arch}:${pg_ver}"]="$ami"
+                done
+              fi
+            done < <(grep -oE '\["[^"]+",\s*"(x64|arm64)",\s*"ami-[^"]+",\s*"ami-[^"]+"\]' "$migration" 2>/dev/null || true)
+          done
+
+          echo "Found ${#old_amis[@]} existing AMI entries"
+
           # Start the migration file
           echo '# frozen_string_literal: true' > "${migration_file}"
           echo '' >> "${migration_file}"
@@ -753,7 +784,7 @@ jobs:
           echo '  up do' >> "${migration_file}"
           echo '    [' >> "${migration_file}"
 
-          # Collect all entries
+          # Collect all entries with old AMIs for rollback
           entries=()
 
           # Add x64 AMIs for each pg_version
@@ -761,9 +792,10 @@ jobs:
             IFS=',' read -ra AMI_ARRAY <<< "$x64_amis"
             for entry in "${AMI_ARRAY[@]}"; do
               region=$(echo "$entry" | cut -d: -f1)
-              ami=$(echo "$entry" | cut -d: -f2)
+              new_ami=$(echo "$entry" | cut -d: -f2)
               for pg_ver in 16 17 18; do
-                entries+=("      [\"${region}\", \"x64\", \"${pg_ver}\", \"${ami}\"]")
+                old_ami="${old_amis["${region}:x64:${pg_ver}"]:-}"
+                entries+=("      [\"${region}\", \"x64\", \"${pg_ver}\", \"${new_ami}\", \"${old_ami}\"]")
               done
             done
           fi
@@ -773,9 +805,10 @@ jobs:
             IFS=',' read -ra AMI_ARRAY <<< "$arm64_amis"
             for entry in "${AMI_ARRAY[@]}"; do
               region=$(echo "$entry" | cut -d: -f1)
-              ami=$(echo "$entry" | cut -d: -f2)
+              new_ami=$(echo "$entry" | cut -d: -f2)
               for pg_ver in 16 17 18; do
-                entries+=("      [\"${region}\", \"arm64\", \"${pg_ver}\", \"${ami}\"]")
+                old_ami="${old_amis["${region}:arm64:${pg_ver}"]:-}"
+                entries+=("      [\"${region}\", \"arm64\", \"${pg_ver}\", \"${new_ami}\", \"${old_ami}\"]")
               done
             done
           fi
@@ -790,25 +823,34 @@ jobs:
             fi
           done
 
-          # Complete the migration file
-          echo '    ].each do |location_name, arch, pg_version, ami_id|' >> "${migration_file}"
+          # Complete the up migration
+          echo '    ].each do |location_name, arch, pg_version, new_ami, _old_ami|' >> "${migration_file}"
           echo '      from(:pg_aws_ami)' >> "${migration_file}"
-          echo '        .insert_conflict(' >> "${migration_file}"
-          echo '          target: [:aws_location_name, :pg_version, :arch],' >> "${migration_file}"
-          echo '          update: {aws_ami_id: Sequel[:excluded][:aws_ami_id]}' >> "${migration_file}"
-          echo '        )' >> "${migration_file}"
-          echo '        .insert(' >> "${migration_file}"
-          echo '          id: Sequel.lit("gen_random_ubid_uuid(474)"),' >> "${migration_file}"
-          echo '          aws_location_name: location_name,' >> "${migration_file}"
-          echo '          arch: arch,' >> "${migration_file}"
-          echo '          pg_version: pg_version,' >> "${migration_file}"
-          echo '          aws_ami_id: ami_id' >> "${migration_file}"
-          echo '        )' >> "${migration_file}"
+          echo '        .where(aws_location_name: location_name, arch: arch, pg_version: pg_version)' >> "${migration_file}"
+          echo '        .update(aws_ami_id: new_ami)' >> "${migration_file}"
           echo '    end' >> "${migration_file}"
           echo '  end' >> "${migration_file}"
           echo '' >> "${migration_file}"
+
+          # Down migration - restore old AMIs
           echo '  down do' >> "${migration_file}"
-          echo '    raise Sequel::Error, "Manual rollback required"' >> "${migration_file}"
+          echo '    [' >> "${migration_file}"
+
+          # Write same entries for down migration
+          for i in "${!entries[@]}"; do
+            if [ $i -eq $((total - 1)) ]; then
+              echo "${entries[$i]}" >> "${migration_file}"
+            else
+              echo "${entries[$i]}," >> "${migration_file}"
+            fi
+          done
+
+          echo '    ].each do |location_name, arch, pg_version, _new_ami, old_ami|' >> "${migration_file}"
+          echo '      next if old_ami.to_s.empty?' >> "${migration_file}"
+          echo '      from(:pg_aws_ami)' >> "${migration_file}"
+          echo '        .where(aws_location_name: location_name, arch: arch, pg_version: pg_version)' >> "${migration_file}"
+          echo '        .update(aws_ami_id: old_ami)' >> "${migration_file}"
+          echo '    end' >> "${migration_file}"
           echo '  end' >> "${migration_file}"
           echo 'end' >> "${migration_file}"
 
