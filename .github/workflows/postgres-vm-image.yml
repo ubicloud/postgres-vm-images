@@ -820,6 +820,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          # Configure git to use the PAT for authentication
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/ubicloud/ubicloud.git"
+
           # Create branch
           branch_name="update-postgres-${{ inputs.flavor }}-images-${{ inputs.image_suffix }}"
           git checkout -b "${branch_name}"
