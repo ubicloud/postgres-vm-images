@@ -740,7 +740,7 @@ jobs:
       - name: Create migration file
         run: |
           cd ubicloud
-          timestamp=$(date +%Y%m%d%H%M%S)
+          timestamp=$(date +%Y%m%d)
           migration_file="migrate/${timestamp}_update_pg_${{ inputs.flavor }}_amis.rb"
 
           x64_amis="${{ steps.collect.outputs.x64_ami_ids }}"
