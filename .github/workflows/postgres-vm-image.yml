@@ -747,72 +747,56 @@ jobs:
           x64_amis="${{ steps.collect.outputs.x64_ami_ids }}"
           arm64_amis="${{ steps.collect.outputs.arm64_ami_ids }}"
 
-          # Find old AMIs from previous migration files
+          # Find old AMIs from previous migration files (keyed by region:arch)
           declare -A old_amis
           echo "=== Searching for existing AMIs in migration files ==="
           for migration in $(ls -1 migrate/*.rb 2>/dev/null | sort); do
-            # Pattern 1: ["region", "arch", "pg_version", "ami"] - with pg_version
-            while IFS= read -r match; do
-              region=$(echo "$match" | sed -E 's/.*\["([^"]+)".*/\1/')
-              arch=$(echo "$match" | sed -E 's/.*",\s*"(x64|arm64)".*/\1/')
-              pg_ver=$(echo "$match" | sed -E 's/.*",\s*"(x64|arm64)",\s*"([0-9]+)".*/\2/')
-              ami=$(echo "$match" | sed -E 's/.*"(ami-[^"]+)".*/\1/')
-              if [[ "$ami" =~ ^ami- ]]; then
-                old_amis["${region}:${arch}:${pg_ver}"]="$ami"
-              fi
-            done < <(grep -oE '\["[^"]+",\s*"(x64|arm64)",\s*"[0-9]+",\s*"ami-[^"]+"\]' "$migration" 2>/dev/null || true)
-
-            # Pattern 2: ["region", "arch", "ami", "old_ami"] - without pg_version (applies to all versions)
+            # Match ["region", "arch", "ami-..."] or ["region", "arch", "ami-...", "ami-..."]
             while IFS= read -r match; do
               region=$(echo "$match" | sed -E 's/.*\["([^"]+)".*/\1/')
               arch=$(echo "$match" | sed -E 's/.*",\s*"(x64|arm64)".*/\1/')
               ami=$(echo "$match" | sed -E 's/.*",\s*"(x64|arm64)",\s*"(ami-[^"]+)".*/\2/')
               if [[ "$ami" =~ ^ami- ]]; then
-                # Apply to all pg_versions
-                for pg_ver in 16 17 18; do
-                  old_amis["${region}:${arch}:${pg_ver}"]="$ami"
-                done
+                old_amis["${region}:${arch}"]="$ami"
               fi
-            done < <(grep -oE '\["[^"]+",\s*"(x64|arm64)",\s*"ami-[^"]+",\s*"ami-[^"]+"\]' "$migration" 2>/dev/null || true)
+            done < <(grep -oE '\["[^"]+",\s*"(x64|arm64)",\s*"ami-[^"]+"' "$migration" 2>/dev/null || true)
           done
 
           echo "Found ${#old_amis[@]} existing AMI entries"
 
-          # Start the migration file
-          echo '# frozen_string_literal: true' > "${migration_file}"
-          echo '' >> "${migration_file}"
-          echo 'Sequel.migration do' >> "${migration_file}"
-          echo '  up do' >> "${migration_file}"
-          echo '    [' >> "${migration_file}"
-
-          # Collect all entries with old AMIs for rollback
+          # Collect entries: [region, arch, new_ami, old_ami]
           entries=()
 
-          # Add x64 AMIs for each pg_version
           if [ -n "$x64_amis" ]; then
             IFS=',' read -ra AMI_ARRAY <<< "$x64_amis"
             for entry in "${AMI_ARRAY[@]}"; do
               region=$(echo "$entry" | cut -d: -f1)
               new_ami=$(echo "$entry" | cut -d: -f2)
-              for pg_ver in 16 17 18; do
-                old_ami="${old_amis["${region}:x64:${pg_ver}"]:-}"
-                entries+=("      [\"${region}\", \"x64\", \"${pg_ver}\", \"${new_ami}\", \"${old_ami}\"]")
-              done
+              old_ami="${old_amis["${region}:x64"]:-}"
+              entries+=("    [\"${region}\", \"x64\", \"${new_ami}\", \"${old_ami}\"]")
             done
           fi
 
-          # Add arm64 AMIs for each pg_version
           if [ -n "$arm64_amis" ]; then
             IFS=',' read -ra AMI_ARRAY <<< "$arm64_amis"
             for entry in "${AMI_ARRAY[@]}"; do
               region=$(echo "$entry" | cut -d: -f1)
               new_ami=$(echo "$entry" | cut -d: -f2)
-              for pg_ver in 16 17 18; do
-                old_ami="${old_amis["${region}:arm64:${pg_ver}"]:-}"
-                entries+=("      [\"${region}\", \"arm64\", \"${pg_ver}\", \"${new_ami}\", \"${old_ami}\"]")
-              done
+              old_ami="${old_amis["${region}:arm64"]:-}"
+              entries+=("    [\"${region}\", \"arm64\", \"${new_ami}\", \"${old_ami}\"]")
             done
           fi
+
+          # Build the migration file
+          cat > "${migration_file}" << 'MIGRATION_HEADER'
+          # frozen_string_literal: true
+
+          Sequel.migration do
+            ami_ids = [
+          MIGRATION_HEADER
+
+          # Remove leading spaces from heredoc
+          sed -i 's/^          //' "${migration_file}"
 
           # Write entries with proper comma separation
           total=${#entries[@]}
@@ -824,36 +808,30 @@ jobs:
             fi
           done
 
-          # Complete the up migration
-          echo '    ].each do |location_name, arch, pg_version, new_ami, _old_ami|' >> "${migration_file}"
-          echo '      from(:pg_aws_ami)' >> "${migration_file}"
-          echo '        .where(aws_location_name: location_name, arch: arch, pg_version: pg_version)' >> "${migration_file}"
-          echo '        .update(aws_ami_id: new_ami)' >> "${migration_file}"
-          echo '    end' >> "${migration_file}"
-          echo '  end' >> "${migration_file}"
-          echo '' >> "${migration_file}"
+          cat >> "${migration_file}" << 'MIGRATION_FOOTER'
+            ]
 
-          # Down migration - restore old AMIs
-          echo '  down do' >> "${migration_file}"
-          echo '    [' >> "${migration_file}"
+            up do
+              ami_ids.each do |location_name, arch, new_ami, _old_ami|
+                from(:pg_aws_ami)
+                  .where(aws_location_name: location_name, arch: arch)
+                  .update(aws_ami_id: new_ami)
+              end
+            end
 
-          # Write same entries for down migration
-          for i in "${!entries[@]}"; do
-            if [ $i -eq $((total - 1)) ]; then
-              echo "${entries[$i]}" >> "${migration_file}"
-            else
-              echo "${entries[$i]}," >> "${migration_file}"
-            fi
-          done
+            down do
+              ami_ids.each do |location_name, arch, _new_ami, old_ami|
+                next if old_ami.to_s.empty?
+                from(:pg_aws_ami)
+                  .where(aws_location_name: location_name, arch: arch)
+                  .update(aws_ami_id: old_ami)
+              end
+            end
+          end
+          MIGRATION_FOOTER
 
-          echo '    ].each do |location_name, arch, pg_version, _new_ami, old_ami|' >> "${migration_file}"
-          echo '      next if old_ami.to_s.empty?' >> "${migration_file}"
-          echo '      from(:pg_aws_ami)' >> "${migration_file}"
-          echo '        .where(aws_location_name: location_name, arch: arch, pg_version: pg_version)' >> "${migration_file}"
-          echo '        .update(aws_ami_id: old_ami)' >> "${migration_file}"
-          echo '    end' >> "${migration_file}"
-          echo '  end' >> "${migration_file}"
-          echo 'end' >> "${migration_file}"
+          # Remove leading spaces from heredoc
+          sed -i 's/^          //' "${migration_file}"
 
           echo "Created migration file: ${migration_file}"
           cat "${migration_file}"
