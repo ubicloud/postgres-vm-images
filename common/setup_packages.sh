@@ -30,7 +30,7 @@ mkdir -p /tmp/wal-g
 cd /tmp/wal-g
 git init
 git remote add origin https://github.com/wal-g/wal-g.git
-git fetch origin --depth 1 cf1ce0f5b69048e31d740b508a79d8294707e339
+git fetch origin --depth 1 6ea13b90a3198bd5c8f8ac2ae323f28e33cf9f06
 git reset --hard FETCH_HEAD
 
 echo "[setup_packages.sh] Running make deps (downloading Go dependencies)..."
