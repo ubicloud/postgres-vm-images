@@ -1,9 +1,0 @@
-#!/bin/env ruby
-# frozen_string_literal: true
-
-require_relative "../../common/lib/util"
-
-# Standard PostgreSQL post-installation
-# Creates commonly used extensions
-r "sudo -u postgres psql -c 'CREATE EXTENSION IF NOT EXISTS pg_cron'"
-r "sudo -u postgres psql -c 'CREATE EXTENSION IF NOT EXISTS vector'"
