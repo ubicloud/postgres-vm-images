@@ -814,7 +814,7 @@ jobs:
             up do
               ami_ids.each do |location_name, arch, new_ami, old_ami|
                 from(:pg_aws_ami)
-                  .where(aws_location_name: location_name, arch: arch, aws_ami_id: old_ami)
+                  .where(aws_location_name: location_name, arch:, aws_ami_id: old_ami)
                   .update(aws_ami_id: new_ami)
               end
             end
@@ -822,7 +822,7 @@ jobs:
             down do
               ami_ids.each do |location_name, arch, new_ami, old_ami|
                 from(:pg_aws_ami)
-                  .where(aws_location_name: location_name, arch: arch, aws_ami_id: new_ami)
+                  .where(aws_location_name: location_name, arch:, aws_ami_id: new_ami)
                   .update(aws_ami_id: old_ami)
               end
             end
