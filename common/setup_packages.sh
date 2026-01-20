@@ -100,14 +100,14 @@ if [ "${UBUNTU_ARCH}" = "amd64" ]; then
     # Download pg_analytics (only PG 16, 17 - no PG 18 support)
     for PG_VERSION in 16 17; do
         echo "[setup_packages.sh] Downloading pg_analytics for PostgreSQL ${PG_VERSION}..."
-        curl -L -o ${PARADEDB_PKG_DIR}/postgresql-${PG_VERSION}-pg-analytics_${PG_ANALYTICS_VERSION}-1PARADEDB-jammy_amd64.deb \
+        curl -L -o ${PARADEDB_PKG_DIR}/postgresql-${PG_VERSION}-pg-analytics.deb \
             "https://github.com/paradedb/pg_analytics/releases/download/v${PG_ANALYTICS_VERSION}/postgresql-${PG_VERSION}-pg-analytics_${PG_ANALYTICS_VERSION}-1PARADEDB-jammy_amd64.deb"
     done
 
     # Download pg_search (PG 16, 17, 18)
     for PG_VERSION in 16 17 18; do
         echo "[setup_packages.sh] Downloading pg_search for PostgreSQL ${PG_VERSION}..."
-        curl -L -o ${PARADEDB_PKG_DIR}/postgresql-${PG_VERSION}-pg-search_${PG_SEARCH_VERSION}-1PARADEDB-jammy_amd64.deb \
+        curl -L -o ${PARADEDB_PKG_DIR}/postgresql-${PG_VERSION}-pg-search.deb \
             "https://github.com/paradedb/paradedb/releases/download/v${PG_SEARCH_VERSION}/postgresql-${PG_VERSION}-pg-search_${PG_SEARCH_VERSION}-1PARADEDB-jammy_amd64.deb"
     done
 
