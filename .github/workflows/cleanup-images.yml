@@ -3,14 +3,6 @@ name: Cleanup Images
 on:
   workflow_dispatch:
     inputs:
-      flavor:
-        description: "Image flavor"
-        required: true
-        default: standard
-        type: choice
-        options:
-          - standard
-          - paradedb
       image_suffix:
         description: "Image version suffix to clean up (e.g., YYYYMMDD.X.Y)"
         type: string
@@ -47,7 +39,7 @@ on:
 
 jobs:
   cleanup:
-    name: Cleanup ${{ inputs.flavor }} images for ${{ inputs.image_suffix }}
+    name: Cleanup images for ${{ inputs.image_suffix }}
     runs-on: ubuntu-latest
     steps:
       - name: Print inputs
@@ -58,14 +50,8 @@ jobs:
       - name: Set image names
         id: set_image_names
         run: |
-          # Generate image names based on flavor and architecture
-          if [ "${{ inputs.flavor }}" = "standard" ]; then
-            x64_image_name="postgres-ubuntu-2204-x64-${{ inputs.image_suffix }}"
-            arm64_image_name="postgres-ubuntu-2204-arm64-${{ inputs.image_suffix }}"
-          else
-            x64_image_name="postgres-${{ inputs.flavor }}-ubuntu-2204-x64-${{ inputs.image_suffix }}"
-            arm64_image_name="postgres-${{ inputs.flavor }}-ubuntu-2204-arm64-${{ inputs.image_suffix }}"
-          fi
+          x64_image_name="postgres-ubuntu-2204-x64-${{ inputs.image_suffix }}"
+          arm64_image_name="postgres-ubuntu-2204-arm64-${{ inputs.image_suffix }}"
 
           echo "x64_image_name=${x64_image_name}" >> $GITHUB_OUTPUT
           echo "arm64_image_name=${arm64_image_name}" >> $GITHUB_OUTPUT
