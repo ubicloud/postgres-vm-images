@@ -1,12 +1,10 @@
 #!/bin/bash
 set -uexo pipefail
 
-# Usage: ./build.sh <flavor> [size_gb]
-# Example: ./build.sh standard 8
-# Example: ./build.sh paradedb 8
+# Usage: ./build.sh [size_gb]
+# Example: ./build.sh 8
 
-FLAVOR="${1:-standard}"
-TARGET_SIZE_GB="${2:-8}"
+TARGET_SIZE_GB="${1:-8}"
 
 # Detect architecture
 HOST_ARCH=$(uname -m)
@@ -26,16 +24,7 @@ case $HOST_ARCH in
 esac
 
 echo "=== Detected architecture: $HOST_ARCH (Ubuntu: $UBUNTU_ARCH, Image: $IMAGE_ARCH) ==="
-
-# Validate flavor exists
-if [ ! -d "flavors/${FLAVOR}" ]; then
-    echo "Error: Flavor '${FLAVOR}' not found in flavors/"
-    echo "Available flavors:"
-    ls -1 flavors/
-    exit 1
-fi
-
-echo "=== Building ${FLAVOR} PostgreSQL image (${TARGET_SIZE_GB}GB) ==="
+echo "=== Building PostgreSQL image (${TARGET_SIZE_GB}GB) ==="
 
 # Install dependencies
 apt update
@@ -127,8 +116,6 @@ mount --bind /sys ${MOUNT_POINT}/sys
 # Copy scripts into the mounted image
 echo "=== Copying scripts to image ==="
 cp -r common ${MOUNT_POINT}/tmp/
-mkdir -p ${MOUNT_POINT}/tmp/flavors
-cp -r flavors/${FLAVOR} ${MOUNT_POINT}/tmp/flavors/
 
 # Write architecture info
 cat > ${MOUNT_POINT}/tmp/build_arch.env << EOF
@@ -137,7 +124,7 @@ IMAGE_ARCH=${IMAGE_ARCH}
 EOF
 
 # Make scripts executable
-chmod +x ${MOUNT_POINT}/tmp/common/*.sh ${MOUNT_POINT}/tmp/flavors/${FLAVOR}/*.sh
+chmod +x ${MOUNT_POINT}/tmp/common/*.sh
 
 echo "=== Running setup scripts in chroot (NATIVE SPEED!) ==="
 
@@ -155,19 +142,9 @@ chroot ${MOUNT_POINT} /bin/bash -c "
   echo '=== Running setup_monitoring.sh ==='
   /tmp/common/setup_monitoring.sh
 
-  echo '=== Running flavor setup: ${FLAVOR} ==='
-  /tmp/flavors/${FLAVOR}/setup.sh
-
   echo '=== Running setup_cleanup.sh ==='
   /tmp/common/setup_cleanup.sh
 "
-
-# Copy flavor-specific post-installation script if it exists
-if [ -f "flavors/${FLAVOR}/assets/post-installation-script" ]; then
-    echo "=== Copying post-installation script ==="
-    mkdir -p ${MOUNT_POINT}/etc/postgresql-partners
-    cp flavors/${FLAVOR}/assets/post-installation-script ${MOUNT_POINT}/etc/postgresql-partners/
-fi
 
 echo "=== Running final cleanup in chroot ==="
 chroot ${MOUNT_POINT} /bin/bash -c "
@@ -215,10 +192,10 @@ kpartx -dv ${LOOP_DEV}
 losetup -d ${LOOP_DEV}
 
 # Rename to final output
-mv cloud.raw postgres-${FLAVOR}-${IMAGE_ARCH}-image.raw
+mv cloud.raw postgres-${IMAGE_ARCH}-image.raw
 
 echo "Final image size:"
-ls -lh postgres-${FLAVOR}-${IMAGE_ARCH}-image.raw
-du -h postgres-${FLAVOR}-${IMAGE_ARCH}-image.raw
+ls -lh postgres-${IMAGE_ARCH}-image.raw
+du -h postgres-${IMAGE_ARCH}-image.raw
 
-echo "=== Build complete: postgres-${FLAVOR}-${IMAGE_ARCH}-image.raw ==="
+echo "=== Build complete: postgres-${IMAGE_ARCH}-image.raw ==="

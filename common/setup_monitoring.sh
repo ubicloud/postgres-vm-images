@@ -56,4 +56,36 @@ cp /tmp/common/assets/postgres_exporter_queries.yaml /usr/local/share/postgresql
 echo "[setup_monitoring.sh] Reloading systemd daemon..."
 systemctl daemon-reload
 
+# =============================================
+# CloudWatch Agent (for AWS AMI compatibility)
+# =============================================
+echo "=== [setup_monitoring.sh] Installing CloudWatch Agent ==="
+
+case $ARCH in
+  x86_64)  CW_ARCH="amd64" ;;
+  aarch64) CW_ARCH="arm64" ;;
+esac
+
+curl -O https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/${CW_ARCH}/latest/amazon-cloudwatch-agent.deb
+dpkg -i amazon-cloudwatch-agent.deb
+rm -f amazon-cloudwatch-agent.deb
+
+# =============================================
+# ClamAV Security Scan
+# =============================================
+echo "=== [setup_monitoring.sh] Installing and running ClamAV scan ==="
+
+apt-get update
+apt-get install -y clamav clamav-freshclam
+
+echo "[setup_monitoring.sh] Updating ClamAV virus database..."
+systemctl stop clamav-freshclam.service || true
+freshclam
+
+echo "[setup_monitoring.sh] Running ClamAV scan on system binaries..."
+mkdir -p /tmp/clamav
+clamscan --quiet -r /usr/bin /usr/sbin /lib /lib64 /usr/lib /etc --log=/tmp/clamav/scan.log -i || true
+echo "[setup_monitoring.sh] ClamAV scan results:"
+cat /tmp/clamav/scan.log || true
+
 echo "=== [setup_monitoring.sh] Complete ==="
