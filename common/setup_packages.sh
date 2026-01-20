@@ -90,7 +90,7 @@ if [ "${UBUNTU_ARCH}" = "amd64" ]; then
 
     # ParadeDB extension versions
     PG_ANALYTICS_VERSION="0.3.7"
-    PG_SEARCH_VERSION="0.21.0"
+    PG_SEARCH_VERSION="0.21.2"
 
     for PG_VERSION in 16 17 18; do
         echo "[setup_packages.sh] Installing ParadeDB extensions for PostgreSQL ${PG_VERSION}..."
