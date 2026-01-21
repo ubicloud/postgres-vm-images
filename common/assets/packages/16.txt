@@ -20,11 +20,13 @@ postgresql-16-pglogical
 postgresql-16-pglogical-dbgsym
 postgresql-16-pgrouting
 postgresql-16-pgrouting-dbgsym
+postgresql-16-pgrouting-scripts
 postgresql-16-pgtap
 postgresql-16-pgvector
 postgresql-16-pgvector-dbgsym
 postgresql-16-postgis-3
 postgresql-16-postgis-3-dbgsym
+postgresql-16-postgis-3-scripts
 postgresql-16-repack
 postgresql-16-repack-dbgsym
 postgresql-16-similarity

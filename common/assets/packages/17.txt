@@ -20,11 +20,13 @@ postgresql-17-pglogical
 postgresql-17-pglogical-dbgsym
 postgresql-17-pgrouting
 postgresql-17-pgrouting-dbgsym
+postgresql-17-pgrouting-scripts
 postgresql-17-pgtap
 postgresql-17-pgvector
 postgresql-17-pgvector-dbgsym
 postgresql-17-postgis-3
 postgresql-17-postgis-3-dbgsym
+postgresql-17-postgis-3-scripts
 postgresql-17-repack
 postgresql-17-repack-dbgsym
 postgresql-17-similarity

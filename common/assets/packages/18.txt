@@ -20,11 +20,13 @@ postgresql-18-pglogical
 postgresql-18-pglogical-dbgsym
 postgresql-18-pgrouting
 postgresql-18-pgrouting-dbgsym
+postgresql-18-pgrouting-scripts
 postgresql-18-pgtap
 postgresql-18-pgvector
 postgresql-18-pgvector-dbgsym
 postgresql-18-postgis-3
 postgresql-18-postgis-3-dbgsym
+postgresql-18-postgis-3-scripts
 postgresql-18-repack
 postgresql-18-repack-dbgsym
 postgresql-18-similarity

@@ -45,6 +45,22 @@ echo "create_main_cluster = 'off'" >> /etc/postgresql-common/createcluster.conf
 mkdir -p /etc/postgresql-common/createcluster.d
 echo "include_dir = '/etc/postgresql-common/createcluster.d'" >> /etc/postgresql-common/createcluster.conf
 
+# Install dependency libraries required by PostgreSQL extensions
+# These are installed now so dpkg can install extensions at runtime without apt-get update
+echo "[setup_base.sh] Installing PostgreSQL extension dependencies..."
+apt-get install -y \
+    libc-ares2 \
+    libevent-2.1-7 \
+    libh3-1 \
+    libgdal30 \
+    libgeos-c1v5 \
+    libproj22 \
+    libprotobuf-c1 \
+    libsfcgal1 \
+    libsybdb5 \
+    default-libmysqlclient-dev \
+    python3-psycopg2
+
 # Copy package lists to reference location
 echo "[setup_base.sh] Copying package lists..."
 mkdir -p /usr/local/share/postgresql/packages
