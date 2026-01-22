@@ -58,6 +58,7 @@ apt-get install -y \
     libprotobuf-c1 \
     libsfcgal1 \
     libsybdb5 \
+    liburing2 \
     default-libmysqlclient-dev \
     python3-psycopg2
 
