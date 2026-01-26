@@ -113,6 +113,13 @@ mount --bind /proc ${MOUNT_POINT}/proc
 mount --bind /sys ${MOUNT_POINT}/sys
 # Note: We don't bind /run to avoid conflicts with resolv.conf symlink
 
+# Configure faster mirror for ARM builds
+if [ "${UBUNTU_ARCH}" = "arm64" ]; then
+    echo "=== Configuring German mirror for ARM packages ==="
+    sed -i 's|ports.ubuntu.com|de.ports.ubuntu.com|g' ${MOUNT_POINT}/etc/apt/sources.list
+    cat ${MOUNT_POINT}/etc/apt/sources.list
+fi
+
 # Copy scripts into the mounted image
 echo "=== Copying scripts to image ==="
 cp -r common ${MOUNT_POINT}/tmp/

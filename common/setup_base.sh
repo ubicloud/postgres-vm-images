@@ -45,6 +45,23 @@ echo "create_main_cluster = 'off'" >> /etc/postgresql-common/createcluster.conf
 mkdir -p /etc/postgresql-common/createcluster.d
 echo "include_dir = '/etc/postgresql-common/createcluster.d'" >> /etc/postgresql-common/createcluster.conf
 
+# Install dependency libraries required by PostgreSQL extensions
+# These are installed now so dpkg can install extensions at runtime without apt-get update
+echo "[setup_base.sh] Installing PostgreSQL extension dependencies..."
+apt-get install -y \
+    libc-ares2 \
+    libevent-2.1-7 \
+    libh3-1 \
+    libgdal30 \
+    libgeos-c1v5 \
+    libproj22 \
+    libprotobuf-c1 \
+    libsfcgal1 \
+    libsybdb5 \
+    liburing2 \
+    default-libmysqlclient-dev \
+    python3-psycopg2
+
 # Copy package lists to reference location
 echo "[setup_base.sh] Copying package lists..."
 mkdir -p /usr/local/share/postgresql/packages
@@ -53,15 +70,31 @@ chown -R root:root /usr/local/share/postgresql/packages
 chmod 755 /usr/local/share/postgresql/packages
 chmod 644 /usr/local/share/postgresql/packages/*.txt
 
-# Combine package files for all versions
-cat /usr/local/share/postgresql/packages/16.txt \
-    /usr/local/share/postgresql/packages/17.txt \
-    /usr/local/share/postgresql/packages/18.txt \
-    /usr/local/share/postgresql/packages/common.txt > /tmp/postgresql-packages.txt
+# Install helper script for runtime package installation
+echo "[setup_base.sh] Installing package installation helper script..."
+cp /tmp/common/assets/scripts/install-postgresql-packages.sh /usr/local/bin/install-postgresql-packages
+chmod 755 /usr/local/bin/install-postgresql-packages
 
-# Install packages from the combined list (download-only to cache them)
-echo "[setup_base.sh] Downloading PostgreSQL packages (download-only)..."
-xargs -a /tmp/postgresql-packages.txt apt-get -y install --download-only
+# Download .deb packages to version-specific directories for dpkg installation at runtime
+echo "[setup_base.sh] Downloading PostgreSQL packages as .deb files..."
+PACKAGE_CACHE="/var/cache/postgresql-packages"
+
+for version in 16 17 18; do
+    echo "[setup_base.sh] Downloading packages for PostgreSQL $version..."
+    mkdir -p "$PACKAGE_CACHE/$version"
+    pushd "$PACKAGE_CACHE/$version" > /dev/null
+    xargs -a /usr/local/share/postgresql/packages/$version.txt apt-get download
+    popd > /dev/null
+done
+
+echo "[setup_base.sh] Downloading common packages..."
+mkdir -p "$PACKAGE_CACHE/common"
+pushd "$PACKAGE_CACHE/common" > /dev/null
+xargs -a /usr/local/share/postgresql/packages/common.txt apt-get download
+popd > /dev/null
+
+echo "[setup_base.sh] Package cache contents:"
+ls -la "$PACKAGE_CACHE"/*
 
 echo "=== [setup_base.sh] Setting up users and groups ==="
 
