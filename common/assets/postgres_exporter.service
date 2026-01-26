@@ -10,7 +10,12 @@ Group=ubi_monitoring
 Type=simple
 Environment=DATA_SOURCE_NAME="host=/var/run/postgresql dbname=postgres"
 ExecStart=/usr/bin/postgres_exporter \
-    --no-collector.stat_bgwriter
+    --disable-default-metrics \
+    --no-collector.stat_bgwriter \
+    --no-collector.stat_database \
+    --no-collector.locks \
+    --no-collector.database \
+    --extend.query-path=/usr/local/share/postgresql/postgres_exporter_queries.yaml
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 
