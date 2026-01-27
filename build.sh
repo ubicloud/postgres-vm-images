@@ -26,6 +26,15 @@ esac
 echo "=== Detected architecture: $HOST_ARCH (Ubuntu: $UBUNTU_ARCH, Image: $IMAGE_ARCH) ==="
 echo "=== Building PostgreSQL image (${TARGET_SIZE_GB}GB) ==="
 
+# Configure faster mirror for ARM hosts (runner machine)
+if [ "${UBUNTU_ARCH}" = "arm64" ]; then
+    echo "=== Configuring German mirror for ARM host ==="
+    sed -i 's|ports.ubuntu.com|de.ports.ubuntu.com|g' /etc/apt/sources.list
+    for f in /etc/apt/sources.list.d/*; do
+        [ -f "$f" ] && sed -i 's|ports.ubuntu.com|de.ports.ubuntu.com|g' "$f"
+    done
+fi
+
 # Install dependencies
 apt update
 apt -y upgrade
