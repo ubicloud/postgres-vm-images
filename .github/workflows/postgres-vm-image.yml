@@ -721,6 +721,19 @@ jobs:
           echo "=== Updated entries ==="
           grep "${image_name}" prog/download_boot_image.rb || true
 
+      - name: Update config.rb
+        run: |
+          cd ubicloud
+          version="${{ steps.collect.outputs.version }}"
+
+          # Update postgres_ubuntu_2204_version in config.rb
+          sed -i -E "s|(override\s*:postgres_ubuntu_2204_version,\s*\")([^\"]+)(\")|\1${version}\3|" config.rb
+          echo "Updated postgres_ubuntu_2204_version to ${version}"
+
+          # Show the change
+          echo "=== Updated config.rb ==="
+          grep "postgres_ubuntu_2204_version" config.rb
+
       - name: Create migration file
         run: |
           cd ubicloud
@@ -859,6 +872,7 @@ jobs:
             --head "${branch_name}" \
             --title "Update postgres images to ${{ inputs.image_suffix }}" \
             --body "## Summary
+          - Updates image version in \`config.rb\`
           - Updates boot image SHA256 hashes in \`prog/download_boot_image.rb\`
           - Adds migration to update AWS AMI IDs in \`pg_aws_ami\` table
 
