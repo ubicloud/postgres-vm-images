@@ -116,8 +116,14 @@ mount --bind /sys ${MOUNT_POINT}/sys
 # Configure faster mirror for ARM builds
 if [ "${UBUNTU_ARCH}" = "arm64" ]; then
     echo "=== Configuring German mirror for ARM packages ==="
+    # Update main sources.list
     sed -i 's|ports.ubuntu.com|de.ports.ubuntu.com|g' ${MOUNT_POINT}/etc/apt/sources.list
+    # Update any additional source files in sources.list.d
+    find ${MOUNT_POINT}/etc/apt/sources.list.d -type f \( -name "*.list" -o -name "*.sources" \) -exec \
+        sed -i 's|ports.ubuntu.com|de.ports.ubuntu.com|g' {} \;
+    echo "=== APT sources after mirror update ==="
     cat ${MOUNT_POINT}/etc/apt/sources.list
+    cat ${MOUNT_POINT}/etc/apt/sources.list.d/*.list ${MOUNT_POINT}/etc/apt/sources.list.d/*.sources 2>/dev/null || true
 fi
 
 # Copy scripts into the mounted image
