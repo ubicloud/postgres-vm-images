@@ -870,6 +870,7 @@ jobs:
           gh pr create \
             --repo ubicloud/ubicloud \
             --head "${branch_name}" \
+            --reviewer byucesoy,shikharbhardwaj \
             --title "Update postgres images to ${{ inputs.image_suffix }}" \
             --body "## Summary
           - Updates image version in \`config.rb\`
