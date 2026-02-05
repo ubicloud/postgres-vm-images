@@ -253,6 +253,7 @@ jobs:
             --name "${ami_name}" \
             --architecture x86_64 \
             --virtualization-type hvm \
+            --boot-mode uefi-preferred \
             --ena-support \
             --root-device-name /dev/sda1 \
             --block-device-mappings "[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"SnapshotId\":\"${snapshot_id}\",\"VolumeSize\":${{ inputs.image_resize_gb }}}}]" \
@@ -529,6 +530,7 @@ jobs:
             --name "${ami_name}" \
             --architecture arm64 \
             --virtualization-type hvm \
+            --boot-mode uefi-preferred \
             --ena-support \
             --root-device-name /dev/sda1 \
             --block-device-mappings "[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"SnapshotId\":\"${snapshot_id}\",\"VolumeSize\":${{ inputs.image_resize_gb }}}}]" \
