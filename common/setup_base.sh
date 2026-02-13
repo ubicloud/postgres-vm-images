@@ -109,4 +109,7 @@ groupadd cert_readers
 usermod --append --groups cert_readers postgres
 usermod --append --groups cert_readers prometheus
 
+echo "[setup_base.sh] Restricting su to sudo group..."
+echo -e '\nauth required pam_wheel.so group=sudo\n' | tee -a /etc/pam.d/su
+
 echo "=== [setup_base.sh] Complete ==="
