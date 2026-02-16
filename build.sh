@@ -5,6 +5,7 @@ set -uexo pipefail
 # Example: ./build.sh 8
 
 TARGET_SIZE_GB="${1:-8}"
+RUN_APT_UPGRADE="${2:-true}"
 
 # Detect architecture
 HOST_ARCH=$(uname -m)
@@ -28,7 +29,7 @@ echo "=== Building PostgreSQL image (${TARGET_SIZE_GB}GB) ==="
 
 # Install dependencies
 apt update
-apt -y upgrade
+[ "$RUN_APT_UPGRADE" = "true" ] && apt -y upgrade
 apt install -y qemu-utils kpartx parted
 
 # Install guestfs-tools for virt-resize (used only for initial image resizing)
