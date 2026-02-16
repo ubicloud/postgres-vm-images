@@ -26,6 +26,15 @@ esac
 echo "=== Detected architecture: $HOST_ARCH (Ubuntu: $UBUNTU_ARCH, Image: $IMAGE_ARCH) ==="
 echo "=== Building PostgreSQL image (${TARGET_SIZE_GB}GB) ==="
 
+# Configure faster mirror for ARM hosts (runner machine)
+if [ "${UBUNTU_ARCH}" = "arm64" ]; then
+    echo "=== Configuring German mirror for ARM host ==="
+    sed -i 's|ports.ubuntu.com|de.ports.ubuntu.com|g' /etc/apt/sources.list
+    for f in /etc/apt/sources.list.d/*; do
+        [ -f "$f" ] && sed -i 's|ports.ubuntu.com|de.ports.ubuntu.com|g' "$f"
+    done
+fi
+
 # Install dependencies
 apt update
 apt -y upgrade
@@ -116,8 +125,22 @@ mount --bind /sys ${MOUNT_POINT}/sys
 # Configure faster mirror for ARM builds
 if [ "${UBUNTU_ARCH}" = "arm64" ]; then
     echo "=== Configuring German mirror for ARM packages ==="
-    sed -i 's|ports.ubuntu.com|de.ports.ubuntu.com|g' ${MOUNT_POINT}/etc/apt/sources.list
-    cat ${MOUNT_POINT}/etc/apt/sources.list
+    echo "APT source files before update:"
+    ls -la ${MOUNT_POINT}/etc/apt/sources.list* ${MOUNT_POINT}/etc/apt/sources.list.d/ 2>/dev/null || true
+
+    # Update all APT source files (sources.list and everything in sources.list.d)
+    for src_file in ${MOUNT_POINT}/etc/apt/sources.list ${MOUNT_POINT}/etc/apt/sources.list.d/*; do
+        if [ -f "$src_file" ]; then
+            echo "Updating: $src_file"
+            sed -i 's|ports.ubuntu.com|de.ports.ubuntu.com|g' "$src_file"
+        fi
+    done
+
+    echo "=== APT sources after mirror update ==="
+    cat ${MOUNT_POINT}/etc/apt/sources.list 2>/dev/null || true
+    for f in ${MOUNT_POINT}/etc/apt/sources.list.d/*; do
+        [ -f "$f" ] && echo "--- $f ---" && cat "$f"
+    done
 fi
 
 # Copy scripts into the mounted image
