@@ -1,0 +1,230 @@
+name: Build GCE PostgreSQL VM Image
+on:
+  workflow_dispatch:
+    inputs:
+      image_suffix:
+        description: "Suffix for image name (e.g., YYYYMMDD.X.Y)"
+        type: string
+        required: true
+      image_resize_gb:
+        description: "Target final image size in GB"
+        required: true
+        default: 8
+        type: number
+      build_only:
+        description: "Build only (skip upload and image creation)"
+        default: false
+        type: boolean
+      gcp_project:
+        description: "GCP project ID for image creation"
+        type: string
+        default: "pelagic-logic-394811"
+      gcs_bucket:
+        description: "GCS bucket for image upload"
+        type: string
+        default: "ubicloud-gce-images"
+      create_ubicloud_pr:
+        description: "Create PR to ubicloud/ubicloud with updated GCE image name"
+        default: false
+        type: boolean
+
+jobs:
+  build-gce-x64:
+    name: Build GCE postgres-ubuntu-2204-x64-${{ inputs.image_suffix }}
+    runs-on: ubicloud-standard-4-ubuntu-2204
+    outputs:
+      image_name: ${{ steps.create_image.outputs.image_name }}
+      image_family: ${{ steps.create_image.outputs.image_family }}
+    steps:
+      - name: Print inputs
+        run: |
+          echo "Inputs: ${{ toJSON(github.event.inputs) }}"
+          echo "Architecture: x64"
+
+      - name: Check out code
+        uses: actions/checkout@v3
+
+      - name: Build GCE image
+        run: |
+          sudo ./build-gce.sh ${{ inputs.image_resize_gb }}
+
+      - name: Set image name
+        id: set_image_name
+        run: |
+          image_name="postgres-ubuntu-2204-x64-${{ inputs.image_suffix }}"
+          echo "image_name=${image_name}" >> $GITHUB_OUTPUT
+          echo "Image name: ${image_name}"
+
+      - name: Rename tar.gz and compute SHA256
+        id: compute_sha
+        run: |
+          src_file="postgres-x64-gce-image.tar.gz"
+          image_name="${{ steps.set_image_name.outputs.image_name }}"
+          dest_file="${image_name}.tar.gz"
+          sha_file="${image_name}.tar.gz.sha256"
+
+          mv "${src_file}" "${dest_file}"
+          sha256sum "${dest_file}" > "${sha_file}"
+          sha256=$(cut -d' ' -f1 "${sha_file}")
+          echo "sha256=${sha256}" >> $GITHUB_OUTPUT
+
+          echo "### GCE Image (x64)" >> $GITHUB_STEP_SUMMARY
+          du -h "${dest_file}" >> $GITHUB_STEP_SUMMARY
+          echo "### SHA256" >> $GITHUB_STEP_SUMMARY
+          cat "${sha_file}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Authenticate to GCP
+        if: ${{ !inputs.build_only }}
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        if: ${{ !inputs.build_only }}
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Upload to GCS
+        if: ${{ !inputs.build_only }}
+        run: |
+          image_name="${{ steps.set_image_name.outputs.image_name }}"
+          tar_file="${image_name}.tar.gz"
+          bucket="${{ inputs.gcs_bucket }}"
+
+          echo "Uploading ${tar_file} to gs://${bucket}/..."
+          gcloud storage cp "${tar_file}" "gs://${bucket}/${tar_file}"
+
+          echo "### GCS Upload" >> $GITHUB_STEP_SUMMARY
+          echo "Uploaded to gs://${bucket}/${tar_file}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Create GCE image
+        if: ${{ !inputs.build_only }}
+        id: create_image
+        run: |
+          image_name="${{ steps.set_image_name.outputs.image_name }}"
+          tar_file="${image_name}.tar.gz"
+          bucket="${{ inputs.gcs_bucket }}"
+          project="${{ inputs.gcp_project }}"
+          image_family="postgres-ubuntu-2204"
+          commit_sha="${{ github.sha }}"
+
+          echo "Creating GCE image: ${image_name}"
+          gcloud compute images create "${image_name}" \
+            --project="${project}" \
+            --source-uri="gs://${bucket}/${tar_file}" \
+            --family="${image_family}" \
+            --guest-os-features=VIRTIO_SCSI_MULTIQUEUE,GVNIC \
+            --labels="source=postgres-vm-images,commit=${commit_sha:0:8},arch=x64"
+
+          echo "image_name=${image_name}" >> $GITHUB_OUTPUT
+          echo "image_family=${image_family}" >> $GITHUB_OUTPUT
+
+          echo "### GCE Image Created" >> $GITHUB_STEP_SUMMARY
+          echo "- Name: ${image_name}" >> $GITHUB_STEP_SUMMARY
+          echo "- Family: ${image_family}" >> $GITHUB_STEP_SUMMARY
+          echo "- Project: ${project}" >> $GITHUB_STEP_SUMMARY
+          echo "- Commit: ${commit_sha:0:8}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Verify image
+        if: ${{ !inputs.build_only }}
+        run: |
+          image_name="${{ steps.set_image_name.outputs.image_name }}"
+          project="${{ inputs.gcp_project }}"
+
+          echo "Verifying image..."
+          gcloud compute images describe "${image_name}" \
+            --project="${project}" \
+            --format="table(name,family,status,diskSizeGb,creationTimestamp)"
+
+      - name: Clean up GCS tar.gz
+        if: ${{ !inputs.build_only }}
+        continue-on-error: true
+        run: |
+          image_name="${{ steps.set_image_name.outputs.image_name }}"
+          bucket="${{ inputs.gcs_bucket }}"
+
+          echo "Cleaning up GCS..."
+          gcloud storage rm "gs://${bucket}/${image_name}.tar.gz"
+
+  create-ubicloud-pr:
+    name: Create PR to ubicloud/ubicloud
+    runs-on: ubicloud-standard-2-ubuntu-2204
+    needs: [build-gce-x64]
+    if: ${{ inputs.create_ubicloud_pr && !inputs.build_only && needs.build-gce-x64.result == 'success' }}
+    steps:
+      - name: Collect outputs
+        id: collect
+        run: |
+          echo "image_name=${{ needs.build-gce-x64.outputs.image_name }}" >> $GITHUB_OUTPUT
+          echo "image_family=${{ needs.build-gce-x64.outputs.image_family }}" >> $GITHUB_OUTPUT
+          echo "version=${{ inputs.image_suffix }}" >> $GITHUB_OUTPUT
+
+      - name: Clone ubicloud/ubicloud
+        run: |
+          git clone --depth 1 https://github.com/ubicloud/ubicloud.git ubicloud
+
+      - name: Update GCE image reference
+        run: |
+          cd ubicloud
+          image_name="${{ steps.collect.outputs.image_name }}"
+          version="${{ steps.collect.outputs.version }}"
+
+          # Update postgres_gce_image_name in config.rb if it exists,
+          # otherwise this is informational for the PR description
+          if grep -q 'postgres_gce_image_name' config.rb; then
+            sed -i -E "s|(override\s*:postgres_gce_image_name,\s*\")([^\"]+)(\")|\1${image_name}\3|" config.rb
+            echo "Updated postgres_gce_image_name to ${image_name}"
+          fi
+
+          echo "=== Changes ==="
+          git diff || echo "No config.rb changes (GCE uses image families)"
+
+      - name: Create Pull Request
+        env:
+          GH_TOKEN: ${{ secrets.UBICLOUD_REPO_PAT }}
+        run: |
+          cd ubicloud
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/ubicloud/ubicloud.git"
+
+          branch_name="update-gce-postgres-image-${{ inputs.image_suffix }}"
+
+          existing_pr=$(gh pr list --repo ubicloud/ubicloud --head "${branch_name}" --json number -q '.[0].number' 2>/dev/null || echo "")
+          if [ -n "$existing_pr" ]; then
+            echo "PR #${existing_pr} already exists for branch ${branch_name}"
+            gh pr view --repo ubicloud/ubicloud "${existing_pr}" --json url -q '.url' >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          git push origin --delete "${branch_name}" 2>/dev/null || true
+
+          # Only create PR if there are changes
+          if git diff --quiet; then
+            echo "No code changes needed — GCE uses image families."
+            echo "Creating informational PR..."
+          fi
+
+          git checkout -b "${branch_name}"
+          git add -A
+
+          if ! git diff --cached --quiet; then
+            git commit -m "Update GCE postgres image to ${{ inputs.image_suffix }}"
+            git push -u origin "${branch_name}"
+
+            gh pr create \
+              --repo ubicloud/ubicloud \
+              --head "${branch_name}" \
+              --title "Update GCE postgres image to ${{ inputs.image_suffix }}" \
+              --body "## Summary
+          - New GCE image: \`${{ steps.collect.outputs.image_name }}\`
+          - Family: \`${{ steps.collect.outputs.image_family }}\`
+          - GCE uses image families, so the latest image in the family is auto-selected
+
+          Generated by [postgres-vm-images](https://github.com/ubicloud/postgres-vm-images) GCE workflow"
+          else
+            echo "No file changes to commit — GCE image family auto-resolves to latest."
+            echo "### GCE Image Updated" >> $GITHUB_STEP_SUMMARY
+            echo "New image \`${{ steps.collect.outputs.image_name }}\` added to family \`${{ steps.collect.outputs.image_family }}\`." >> $GITHUB_STEP_SUMMARY
+            echo "No Ubicloud code changes needed — family reference auto-resolves." >> $GITHUB_STEP_SUMMARY
+          fi

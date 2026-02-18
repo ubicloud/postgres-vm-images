@@ -1,0 +1,86 @@
+name: Cleanup GCE Images
+on:
+  workflow_dispatch:
+    inputs:
+      image_suffix:
+        description: "Image version suffix to clean up (e.g., YYYYMMDD.X.Y)"
+        type: string
+        required: true
+      gcp_project:
+        description: "GCP project ID"
+        type: string
+        default: "pelagic-logic-394811"
+      gcs_bucket:
+        description: "GCS bucket for image tarballs"
+        type: string
+        default: "ubicloud-gce-images"
+      dry_run:
+        description: "Dry run (check existence only, don't delete)"
+        default: false
+        type: boolean
+
+jobs:
+  cleanup:
+    name: Cleanup GCE image for ${{ inputs.image_suffix }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print inputs
+        run: |
+          echo "Inputs: ${{ toJSON(github.event.inputs) }}"
+          echo "Dry run: ${{ inputs.dry_run }}"
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Cleanup GCE image and GCS tarball
+        run: |
+          image_name="postgres-ubuntu-2204-x64-${{ inputs.image_suffix }}"
+          project="${{ inputs.gcp_project }}"
+          bucket="${{ inputs.gcs_bucket }}"
+
+          echo "### GCE Image Cleanup" >> $GITHUB_STEP_SUMMARY
+
+          # Check if GCE image exists
+          if gcloud compute images describe "${image_name}" --project="${project}" &>/dev/null; then
+            echo "Found GCE image: ${image_name}"
+            if [ "${{ inputs.dry_run }}" = "true" ]; then
+              echo "[DRY RUN] Would delete image: ${image_name}"
+              echo "- [DRY RUN] Would delete image: ${image_name}" >> $GITHUB_STEP_SUMMARY
+            else
+              gcloud compute images delete "${image_name}" --project="${project}" --quiet
+              echo "Deleted image: ${image_name}"
+              echo "- Deleted image: ${image_name}" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "Image not found: ${image_name}"
+            echo "- Image not found: ${image_name}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Check if GCS tarball exists
+          tar_file="${image_name}.tar.gz"
+          if gcloud storage ls "gs://${bucket}/${tar_file}" &>/dev/null; then
+            echo "Found GCS tarball: ${tar_file}"
+            if [ "${{ inputs.dry_run }}" = "true" ]; then
+              echo "[DRY RUN] Would delete tarball: gs://${bucket}/${tar_file}"
+              echo "- [DRY RUN] Would delete tarball: ${tar_file}" >> $GITHUB_STEP_SUMMARY
+            else
+              gcloud storage rm "gs://${bucket}/${tar_file}"
+              echo "Deleted tarball: ${tar_file}"
+              echo "- Deleted tarball: ${tar_file}" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "Tarball not found: gs://${bucket}/${tar_file}"
+            echo "- Tarball not found: ${tar_file}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "**This was a dry run. Nothing was deleted.**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Cleanup complete.**" >> $GITHUB_STEP_SUMMARY
+          fi
