@@ -1,0 +1,12 @@
+[Unit]
+Description=Block non-root access to EC2 instance metadata
+DefaultDependencies=no
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'grep -qi amazon /sys/devices/virtual/dmi/id/sys_vendor 2>/dev/null && nft -f /etc/nftables.conf || true'
+
+[Install]
+WantedBy=multi-user.target
