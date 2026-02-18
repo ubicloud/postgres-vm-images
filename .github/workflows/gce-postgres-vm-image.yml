@@ -34,7 +34,7 @@ jobs:
     runs-on: ubicloud-standard-4-ubuntu-2204
     outputs:
       image_name: ${{ steps.create_image.outputs.image_name }}
-      image_family: ${{ steps.create_image.outputs.image_family }}
+      image_project: ${{ steps.create_image.outputs.image_project }}
     steps:
       - name: Print inputs
         run: |
@@ -104,25 +104,23 @@ jobs:
           tar_file="${image_name}.tar.gz"
           bucket="${{ inputs.gcs_bucket }}"
           project="${{ inputs.gcp_project }}"
-          image_family="postgres-ubuntu-2204"
           commit_sha="${{ github.sha }}"
 
-          echo "Creating GCE image: ${image_name}"
+          echo "Creating GCE image: ${image_name} (no family — gated deployment)"
           gcloud compute images create "${image_name}" \
             --project="${project}" \
             --source-uri="gs://${bucket}/${tar_file}" \
-            --family="${image_family}" \
             --guest-os-features=VIRTIO_SCSI_MULTIQUEUE,GVNIC \
             --labels="source=postgres-vm-images,commit=${commit_sha:0:8},arch=x64"
 
           echo "image_name=${image_name}" >> $GITHUB_OUTPUT
-          echo "image_family=${image_family}" >> $GITHUB_OUTPUT
+          echo "image_project=${project}" >> $GITHUB_OUTPUT
 
-          echo "### GCE Image Created" >> $GITHUB_STEP_SUMMARY
+          echo "### GCE Image Created (gated)" >> $GITHUB_STEP_SUMMARY
           echo "- Name: ${image_name}" >> $GITHUB_STEP_SUMMARY
-          echo "- Family: ${image_family}" >> $GITHUB_STEP_SUMMARY
           echo "- Project: ${project}" >> $GITHUB_STEP_SUMMARY
           echo "- Commit: ${commit_sha:0:8}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Not auto-deployed** — merge the PR migration to promote" >> $GITHUB_STEP_SUMMARY
 
       - name: Verify image
         if: ${{ !inputs.build_only }}
@@ -155,28 +153,43 @@ jobs:
         id: collect
         run: |
           echo "image_name=${{ needs.build-gce-x64.outputs.image_name }}" >> $GITHUB_OUTPUT
-          echo "image_family=${{ needs.build-gce-x64.outputs.image_family }}" >> $GITHUB_OUTPUT
+          echo "image_project=${{ needs.build-gce-x64.outputs.image_project }}" >> $GITHUB_OUTPUT
           echo "version=${{ inputs.image_suffix }}" >> $GITHUB_OUTPUT
 
       - name: Clone ubicloud/ubicloud
         run: |
           git clone --depth 1 https://github.com/ubicloud/ubicloud.git ubicloud
 
-      - name: Update GCE image reference
+      - name: Generate promotion migration
         run: |
           cd ubicloud
           image_name="${{ steps.collect.outputs.image_name }}"
-          version="${{ steps.collect.outputs.version }}"
+          project="${{ steps.collect.outputs.image_project }}"
 
-          # Update postgres_gce_image_name in config.rb if it exists,
-          # otherwise this is informational for the PR description
-          if grep -q 'postgres_gce_image_name' config.rb; then
-            sed -i -E "s|(override\s*:postgres_gce_image_name,\s*\")([^\"]+)(\")|\1${image_name}\3|" config.rb
-            echo "Updated postgres_gce_image_name to ${image_name}"
-          fi
+          # Compute migration date from image_suffix (YYYYMMDD.X.Y -> YYYYMMDD)
+          migration_date=$(echo "${{ inputs.image_suffix }}" | cut -d. -f1)
 
-          echo "=== Changes ==="
-          git diff || echo "No config.rb changes (GCE uses image families)"
+          cat > "migrate/${migration_date}_update_pg_gce_images.rb" <<MIGRATION
+          # frozen_string_literal: true
+
+          Sequel.migration do
+            up do
+              from(:pg_gce_image)
+                .where(gcp_project_id: "${project}")
+                .update(gce_image_name: "${image_name}")
+            end
+
+            down do
+              raise Sequel::Error, "irreversible: previous GCE image name unknown"
+            end
+          end
+          MIGRATION
+
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' "migrate/${migration_date}_update_pg_gce_images.rb"
+
+          echo "=== Generated migration ==="
+          cat "migrate/${migration_date}_update_pg_gce_images.rb"
 
       - name: Create Pull Request
         env:
@@ -199,32 +212,18 @@ jobs:
 
           git push origin --delete "${branch_name}" 2>/dev/null || true
 
-          # Only create PR if there are changes
-          if git diff --quiet; then
-            echo "No code changes needed — GCE uses image families."
-            echo "Creating informational PR..."
-          fi
-
           git checkout -b "${branch_name}"
           git add -A
+          git commit -m "Promote GCE postgres image to ${{ inputs.image_suffix }}"
+          git push -u origin "${branch_name}"
 
-          if ! git diff --cached --quiet; then
-            git commit -m "Update GCE postgres image to ${{ inputs.image_suffix }}"
-            git push -u origin "${branch_name}"
-
-            gh pr create \
-              --repo ubicloud/ubicloud \
-              --head "${branch_name}" \
-              --title "Update GCE postgres image to ${{ inputs.image_suffix }}" \
-              --body "## Summary
+          gh pr create \
+            --repo ubicloud/ubicloud \
+            --head "${branch_name}" \
+            --title "Promote GCE postgres image to ${{ inputs.image_suffix }}" \
+            --body "## Summary
           - New GCE image: \`${{ steps.collect.outputs.image_name }}\`
-          - Family: \`${{ steps.collect.outputs.image_family }}\`
-          - GCE uses image families, so the latest image in the family is auto-selected
+          - Project: \`${{ steps.collect.outputs.image_project }}\`
+          - **Merge this PR to promote the image** — new Postgres resources will use it after migration runs
 
           Generated by [postgres-vm-images](https://github.com/ubicloud/postgres-vm-images) GCE workflow"
-          else
-            echo "No file changes to commit — GCE image family auto-resolves to latest."
-            echo "### GCE Image Updated" >> $GITHUB_STEP_SUMMARY
-            echo "New image \`${{ steps.collect.outputs.image_name }}\` added to family \`${{ steps.collect.outputs.image_family }}\`." >> $GITHUB_STEP_SUMMARY
-            echo "No Ubicloud code changes needed — family reference auto-resolves." >> $GITHUB_STEP_SUMMARY
-          fi
