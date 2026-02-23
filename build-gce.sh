@@ -71,8 +71,7 @@ echo "=== GCE: Installing Google guest agent ==="
 chroot "${MOUNT_POINT}" /bin/bash -c "
   set -uexo pipefail
   export DEBIAN_FRONTEND=noninteractive
-  echo 'deb http://packages.cloud.google.com/apt google-compute-engine-jammy-stable main' > /etc/apt/sources.list.d/google-compute-engine.list
-  curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
+  apt-add-repository -y universe
   apt-get update -qq
   apt-get install -y -qq google-guest-agent google-compute-engine
   apt-get clean
