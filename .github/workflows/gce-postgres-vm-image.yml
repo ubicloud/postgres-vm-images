@@ -15,6 +15,10 @@ on:
         description: "Build only (skip upload and image creation)"
         default: false
         type: boolean
+      build_arm64:
+        description: "Build ARM64 image"
+        default: false
+        type: boolean
       gcp_project:
         description: "GCP project ID for image creation"
         type: string
@@ -24,7 +28,7 @@ on:
         type: string
         default: "ubicloud-gce-images"
       create_ubicloud_pr:
-        description: "Create PR to ubicloud/ubicloud with updated GCE image name"
+        description: "Create PR to ubicloud/ubicloud with updated GCE image names"
         default: false
         type: boolean
 
@@ -93,7 +97,7 @@ jobs:
           echo "Uploading ${tar_file} to gs://${bucket}/..."
           gcloud storage cp "${tar_file}" "gs://${bucket}/${tar_file}"
 
-          echo "### GCS Upload" >> $GITHUB_STEP_SUMMARY
+          echo "### GCS Upload (x64)" >> $GITHUB_STEP_SUMMARY
           echo "Uploaded to gs://${bucket}/${tar_file}" >> $GITHUB_STEP_SUMMARY
 
       - name: Create GCE image
@@ -116,7 +120,122 @@ jobs:
           echo "image_name=${image_name}" >> $GITHUB_OUTPUT
           echo "image_project=${project}" >> $GITHUB_OUTPUT
 
-          echo "### GCE Image Created (gated)" >> $GITHUB_STEP_SUMMARY
+          echo "### GCE Image Created (gated, x64)" >> $GITHUB_STEP_SUMMARY
+          echo "- Name: ${image_name}" >> $GITHUB_STEP_SUMMARY
+          echo "- Project: ${project}" >> $GITHUB_STEP_SUMMARY
+          echo "- Commit: ${commit_sha:0:8}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Not auto-deployed** — merge the PR migration to promote" >> $GITHUB_STEP_SUMMARY
+
+      - name: Verify image
+        if: ${{ !inputs.build_only }}
+        run: |
+          image_name="${{ steps.set_image_name.outputs.image_name }}"
+          project="${{ inputs.gcp_project }}"
+
+          echo "Verifying image..."
+          gcloud compute images describe "${image_name}" \
+            --project="${project}" \
+            --format="table(name,family,status,diskSizeGb,creationTimestamp)"
+
+      - name: Clean up GCS tar.gz
+        if: ${{ !inputs.build_only }}
+        continue-on-error: true
+        run: |
+          image_name="${{ steps.set_image_name.outputs.image_name }}"
+          bucket="${{ inputs.gcs_bucket }}"
+
+          echo "Cleaning up GCS..."
+          gcloud storage rm "gs://${bucket}/${image_name}.tar.gz"
+
+  build-gce-arm64:
+    name: Build GCE postgres-ubuntu-2204-arm64-${{ inputs.image_suffix }}
+    runs-on: ubicloud-standard-4-arm-ubuntu-2204
+    if: ${{ inputs.build_arm64 }}
+    outputs:
+      image_name: ${{ steps.create_image.outputs.image_name }}
+      image_project: ${{ steps.create_image.outputs.image_project }}
+    steps:
+      - name: Print inputs
+        run: |
+          echo "Inputs: ${{ toJSON(github.event.inputs) }}"
+          echo "Architecture: arm64"
+
+      - name: Check out code
+        uses: actions/checkout@v3
+
+      - name: Build GCE image
+        run: |
+          sudo ./build-gce.sh ${{ inputs.image_resize_gb }}
+
+      - name: Set image name
+        id: set_image_name
+        run: |
+          image_name="postgres-ubuntu-2204-arm64-${{ inputs.image_suffix }}"
+          echo "image_name=${image_name}" >> $GITHUB_OUTPUT
+          echo "Image name: ${image_name}"
+
+      - name: Rename tar.gz and compute SHA256
+        id: compute_sha
+        run: |
+          src_file="postgres-arm64-gce-image.tar.gz"
+          image_name="${{ steps.set_image_name.outputs.image_name }}"
+          dest_file="${image_name}.tar.gz"
+          sha_file="${image_name}.tar.gz.sha256"
+
+          mv "${src_file}" "${dest_file}"
+          sha256sum "${dest_file}" > "${sha_file}"
+          sha256=$(cut -d' ' -f1 "${sha_file}")
+          echo "sha256=${sha256}" >> $GITHUB_OUTPUT
+
+          echo "### GCE Image (arm64)" >> $GITHUB_STEP_SUMMARY
+          du -h "${dest_file}" >> $GITHUB_STEP_SUMMARY
+          echo "### SHA256" >> $GITHUB_STEP_SUMMARY
+          cat "${sha_file}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Authenticate to GCP
+        if: ${{ !inputs.build_only }}
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        if: ${{ !inputs.build_only }}
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Upload to GCS
+        if: ${{ !inputs.build_only }}
+        run: |
+          image_name="${{ steps.set_image_name.outputs.image_name }}"
+          tar_file="${image_name}.tar.gz"
+          bucket="${{ inputs.gcs_bucket }}"
+
+          echo "Uploading ${tar_file} to gs://${bucket}/..."
+          gcloud storage cp "${tar_file}" "gs://${bucket}/${tar_file}"
+
+          echo "### GCS Upload (arm64)" >> $GITHUB_STEP_SUMMARY
+          echo "Uploaded to gs://${bucket}/${tar_file}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Create GCE image
+        if: ${{ !inputs.build_only }}
+        id: create_image
+        run: |
+          image_name="${{ steps.set_image_name.outputs.image_name }}"
+          tar_file="${image_name}.tar.gz"
+          bucket="${{ inputs.gcs_bucket }}"
+          project="${{ inputs.gcp_project }}"
+          commit_sha="${{ github.sha }}"
+
+          echo "Creating GCE image: ${image_name} (no family — gated deployment)"
+          gcloud compute images create "${image_name}" \
+            --project="${project}" \
+            --source-uri="gs://${bucket}/${tar_file}" \
+            --guest-os-features=GVNIC,UEFI_COMPATIBLE \
+            --labels="source=postgres-vm-images,commit=${commit_sha:0:8},arch=arm64"
+
+          echo "image_name=${image_name}" >> $GITHUB_OUTPUT
+          echo "image_project=${project}" >> $GITHUB_OUTPUT
+
+          echo "### GCE Image Created (gated, arm64)" >> $GITHUB_STEP_SUMMARY
           echo "- Name: ${image_name}" >> $GITHUB_STEP_SUMMARY
           echo "- Project: ${project}" >> $GITHUB_STEP_SUMMARY
           echo "- Commit: ${commit_sha:0:8}" >> $GITHUB_STEP_SUMMARY
@@ -146,13 +265,14 @@ jobs:
   create-ubicloud-pr:
     name: Create PR to ubicloud/ubicloud
     runs-on: ubicloud-standard-2-ubuntu-2204
-    needs: [build-gce-x64]
-    if: ${{ inputs.create_ubicloud_pr && !inputs.build_only && needs.build-gce-x64.result == 'success' }}
+    needs: [build-gce-x64, build-gce-arm64]
+    if: ${{ always() && inputs.create_ubicloud_pr && !inputs.build_only && needs.build-gce-x64.result == 'success' }}
     steps:
       - name: Collect outputs
         id: collect
         run: |
-          echo "image_name=${{ needs.build-gce-x64.outputs.image_name }}" >> $GITHUB_OUTPUT
+          echo "x64_image_name=${{ needs.build-gce-x64.outputs.image_name }}" >> $GITHUB_OUTPUT
+          echo "arm64_image_name=${{ needs.build-gce-arm64.outputs.image_name }}" >> $GITHUB_OUTPUT
           echo "image_project=${{ needs.build-gce-x64.outputs.image_project }}" >> $GITHUB_OUTPUT
           echo "version=${{ inputs.image_suffix }}" >> $GITHUB_OUTPUT
 
@@ -163,7 +283,8 @@ jobs:
       - name: Generate promotion migration
         run: |
           cd ubicloud
-          image_name="${{ steps.collect.outputs.image_name }}"
+          x64_image_name="${{ steps.collect.outputs.x64_image_name }}"
+          arm64_image_name="${{ steps.collect.outputs.arm64_image_name }}"
           project="${{ steps.collect.outputs.image_project }}"
 
           # Compute migration date from image_suffix (YYYYMMDD.X.Y -> YYYYMMDD)
@@ -174,18 +295,39 @@ jobs:
 
           Sequel.migration do
             up do
-              from(:pg_gce_image)
-                .where(gcp_project_id: "${project}")
-                .update(gce_image_name: "${image_name}")
-            end
-
-            down do
-              raise Sequel::Error, "irreversible: previous GCE image name unknown"
-            end
-          end
           MIGRATION
 
           # Remove leading whitespace from heredoc
+          sed -i 's/^          //' "migrate/${migration_date}_update_pg_gce_images.rb"
+
+          # Add x64 update
+          if [ -n "$x64_image_name" ]; then
+            cat >> "migrate/${migration_date}_update_pg_gce_images.rb" <<MIGRATION
+              from(:pg_gce_image)
+                .where(gcp_project_id: "${project}", arch: "x64")
+                .update(gce_image_name: "${x64_image_name}")
+          MIGRATION
+            sed -i 's/^          //' "migrate/${migration_date}_update_pg_gce_images.rb"
+          fi
+
+          # Add arm64 update
+          if [ -n "$arm64_image_name" ]; then
+            cat >> "migrate/${migration_date}_update_pg_gce_images.rb" <<MIGRATION
+              from(:pg_gce_image)
+                .where(gcp_project_id: "${project}", arch: "arm64")
+                .update(gce_image_name: "${arm64_image_name}")
+          MIGRATION
+            sed -i 's/^          //' "migrate/${migration_date}_update_pg_gce_images.rb"
+          fi
+
+          cat >> "migrate/${migration_date}_update_pg_gce_images.rb" <<MIGRATION
+            end
+
+            down do
+              raise Sequel::Error, "irreversible: previous GCE image names unknown"
+            end
+          end
+          MIGRATION
           sed -i 's/^          //' "migrate/${migration_date}_update_pg_gce_images.rb"
 
           echo "=== Generated migration ==="
@@ -214,16 +356,33 @@ jobs:
 
           git checkout -b "${branch_name}"
           git add -A
-          git commit -m "Promote GCE postgres image to ${{ inputs.image_suffix }}"
+          git commit -m "Promote GCE postgres images to ${{ inputs.image_suffix }}"
           git push -u origin "${branch_name}"
+
+          # Build PR body
+          body="## Summary"
+          body="${body}
+          - Project: \`${{ steps.collect.outputs.image_project }}\`"
+
+          x64_image="${{ steps.collect.outputs.x64_image_name }}"
+          arm64_image="${{ steps.collect.outputs.arm64_image_name }}"
+
+          if [ -n "$x64_image" ]; then
+            body="${body}
+          - x64 image: \`${x64_image}\`"
+          fi
+          if [ -n "$arm64_image" ]; then
+            body="${body}
+          - arm64 image: \`${arm64_image}\`"
+          fi
+
+          body="${body}
+          - **Merge this PR to promote the images** — new Postgres resources will use them after migration runs
+
+          Generated by [postgres-vm-images](https://github.com/ubicloud/postgres-vm-images) GCE workflow"
 
           gh pr create \
             --repo ubicloud/ubicloud \
             --head "${branch_name}" \
-            --title "Promote GCE postgres image to ${{ inputs.image_suffix }}" \
-            --body "## Summary
-          - New GCE image: \`${{ steps.collect.outputs.image_name }}\`
-          - Project: \`${{ steps.collect.outputs.image_project }}\`
-          - **Merge this PR to promote the image** — new Postgres resources will use it after migration runs
-
-          Generated by [postgres-vm-images](https://github.com/ubicloud/postgres-vm-images) GCE workflow"
+            --title "Promote GCE postgres images to ${{ inputs.image_suffix }}" \
+            --body "${body}"

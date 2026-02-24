@@ -6,6 +6,15 @@ on:
         description: "Image version suffix to clean up (e.g., YYYYMMDD.X.Y)"
         type: string
         required: true
+      architecture:
+        description: "Architecture(s) to clean up"
+        required: true
+        default: both
+        type: choice
+        options:
+          - x64
+          - arm64
+          - both
       gcp_project:
         description: "GCP project ID"
         type: string
@@ -21,7 +30,7 @@ on:
 
 jobs:
   cleanup:
-    name: Cleanup GCE image for ${{ inputs.image_suffix }}
+    name: Cleanup GCE images for ${{ inputs.image_suffix }}
     runs-on: ubuntu-latest
     steps:
       - name: Print inputs
@@ -37,45 +46,74 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Cleanup GCE image and GCS tarball
+      - name: Set image names
+        id: set_image_names
         run: |
-          image_name="postgres-ubuntu-2204-x64-${{ inputs.image_suffix }}"
+          x64_image_name="postgres-ubuntu-2204-x64-${{ inputs.image_suffix }}"
+          arm64_image_name="postgres-ubuntu-2204-arm64-${{ inputs.image_suffix }}"
+
+          echo "x64_image_name=${x64_image_name}" >> $GITHUB_OUTPUT
+          echo "arm64_image_name=${arm64_image_name}" >> $GITHUB_OUTPUT
+
+          echo "### Target Images" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.architecture }}" = "x64" ] || [ "${{ inputs.architecture }}" = "both" ]; then
+            echo "- x64: ${x64_image_name}" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "${{ inputs.architecture }}" = "arm64" ] || [ "${{ inputs.architecture }}" = "both" ]; then
+            echo "- arm64: ${arm64_image_name}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Cleanup GCE images and GCS tarballs
+        run: |
           project="${{ inputs.gcp_project }}"
           bucket="${{ inputs.gcs_bucket }}"
 
           echo "### GCE Image Cleanup" >> $GITHUB_STEP_SUMMARY
 
-          # Check if GCE image exists
-          if gcloud compute images describe "${image_name}" --project="${project}" &>/dev/null; then
-            echo "Found GCE image: ${image_name}"
-            if [ "${{ inputs.dry_run }}" = "true" ]; then
-              echo "[DRY RUN] Would delete image: ${image_name}"
-              echo "- [DRY RUN] Would delete image: ${image_name}" >> $GITHUB_STEP_SUMMARY
+          cleanup_image() {
+            local image_name=$1
+            local arch=$2
+
+            # Check if GCE image exists
+            if gcloud compute images describe "${image_name}" --project="${project}" &>/dev/null; then
+              echo "Found GCE image: ${image_name}"
+              if [ "${{ inputs.dry_run }}" = "true" ]; then
+                echo "[DRY RUN] Would delete image: ${image_name}"
+                echo "- [DRY RUN] Would delete ${arch} image: ${image_name}" >> $GITHUB_STEP_SUMMARY
+              else
+                gcloud compute images delete "${image_name}" --project="${project}" --quiet
+                echo "Deleted image: ${image_name}"
+                echo "- Deleted ${arch} image: ${image_name}" >> $GITHUB_STEP_SUMMARY
+              fi
             else
-              gcloud compute images delete "${image_name}" --project="${project}" --quiet
-              echo "Deleted image: ${image_name}"
-              echo "- Deleted image: ${image_name}" >> $GITHUB_STEP_SUMMARY
+              echo "Image not found: ${image_name}"
+              echo "- ${arch} image not found: ${image_name}" >> $GITHUB_STEP_SUMMARY
             fi
-          else
-            echo "Image not found: ${image_name}"
-            echo "- Image not found: ${image_name}" >> $GITHUB_STEP_SUMMARY
+
+            # Check if GCS tarball exists
+            tar_file="${image_name}.tar.gz"
+            if gcloud storage ls "gs://${bucket}/${tar_file}" &>/dev/null; then
+              echo "Found GCS tarball: ${tar_file}"
+              if [ "${{ inputs.dry_run }}" = "true" ]; then
+                echo "[DRY RUN] Would delete tarball: gs://${bucket}/${tar_file}"
+                echo "- [DRY RUN] Would delete ${arch} tarball: ${tar_file}" >> $GITHUB_STEP_SUMMARY
+              else
+                gcloud storage rm "gs://${bucket}/${tar_file}"
+                echo "Deleted tarball: ${tar_file}"
+                echo "- Deleted ${arch} tarball: ${tar_file}" >> $GITHUB_STEP_SUMMARY
+              fi
+            else
+              echo "Tarball not found: gs://${bucket}/${tar_file}"
+              echo "- ${arch} tarball not found: ${tar_file}" >> $GITHUB_STEP_SUMMARY
+            fi
+          }
+
+          if [ "${{ inputs.architecture }}" = "x64" ] || [ "${{ inputs.architecture }}" = "both" ]; then
+            cleanup_image "${{ steps.set_image_names.outputs.x64_image_name }}" "x64"
           fi
 
-          # Check if GCS tarball exists
-          tar_file="${image_name}.tar.gz"
-          if gcloud storage ls "gs://${bucket}/${tar_file}" &>/dev/null; then
-            echo "Found GCS tarball: ${tar_file}"
-            if [ "${{ inputs.dry_run }}" = "true" ]; then
-              echo "[DRY RUN] Would delete tarball: gs://${bucket}/${tar_file}"
-              echo "- [DRY RUN] Would delete tarball: ${tar_file}" >> $GITHUB_STEP_SUMMARY
-            else
-              gcloud storage rm "gs://${bucket}/${tar_file}"
-              echo "Deleted tarball: ${tar_file}"
-              echo "- Deleted tarball: ${tar_file}" >> $GITHUB_STEP_SUMMARY
-            fi
-          else
-            echo "Tarball not found: gs://${bucket}/${tar_file}"
-            echo "- Tarball not found: ${tar_file}" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.architecture }}" = "arm64" ] || [ "${{ inputs.architecture }}" = "both" ]; then
+            cleanup_image "${{ steps.set_image_names.outputs.arm64_image_name }}" "arm64"
           fi
 
           echo "" >> $GITHUB_STEP_SUMMARY
