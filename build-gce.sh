@@ -59,12 +59,37 @@ mount --bind /dev/pts "${MOUNT_POINT}/dev/pts"
 mount --bind /proc "${MOUNT_POINT}/proc"
 mount --bind /sys "${MOUNT_POINT}/sys"
 
-# Step 3: Reinstall GRUB for BIOS boot (virt-resize can corrupt bootloader)
-echo "=== GCE: Reinstalling GRUB for BIOS boot ==="
-chroot "${MOUNT_POINT}" /bin/bash -c "
-  grub-install --target=i386-pc ${LOOP_DEV}
-  update-grub
-"
+# Step 3: Reinstall GRUB (architecture-specific)
+if [ "$HOST_ARCH" = "x86_64" ]; then
+  echo "=== GCE: Reinstalling GRUB for BIOS boot (x86_64) ==="
+  chroot "${MOUNT_POINT}" /bin/bash -c "
+    grub-install --target=i386-pc ${LOOP_DEV}
+    update-grub
+  "
+else
+  echo "=== GCE: Updating GRUB for EFI boot (arm64) ==="
+  # ARM64 uses UEFI boot - the EFI partition from the Ubuntu cloud image
+  # is already correct. Just update grub config.
+  # Mount the EFI partition if present
+  EFI_PART=""
+  for part in /dev/mapper/${LOOP_BASE}p*; do
+    if [ -b "$part" ]; then
+      FS_TYPE=$(blkid -o value -s TYPE "$part" 2>/dev/null || echo "")
+      if [ "$FS_TYPE" = "vfat" ]; then
+        EFI_PART="$part"
+        break
+      fi
+    fi
+  done
+  if [ -n "$EFI_PART" ]; then
+    mkdir -p "${MOUNT_POINT}/boot/efi"
+    mount "$EFI_PART" "${MOUNT_POINT}/boot/efi"
+    chroot "${MOUNT_POINT}" /bin/bash -c "update-grub"
+    umount "${MOUNT_POINT}/boot/efi"
+  else
+    chroot "${MOUNT_POINT}" /bin/bash -c "update-grub"
+  fi
+fi
 
 # Step 4: Install Google guest agent for metadata processing
 echo "=== GCE: Installing Google guest agent ==="
@@ -107,7 +132,14 @@ ls -lh "postgres-${IMAGE_ARCH}-gce-image.tar.gz"
 echo "=== GCE build complete ==="
 echo "Upload and create GCE image with:"
 echo "  gcloud storage cp postgres-${IMAGE_ARCH}-gce-image.tar.gz gs://BUCKET/postgres-${IMAGE_ARCH}-gce-image.tar.gz"
-echo "  gcloud compute images create postgres-ubuntu-2204-${IMAGE_ARCH}-YYYYMMDD \\"
-echo "    --source-uri=gs://BUCKET/postgres-${IMAGE_ARCH}-gce-image.tar.gz \\"
-echo "    --family=postgres-ubuntu-2204 \\"
-echo "    --guest-os-features=VIRTIO_SCSI_MULTIQUEUE,GVNIC"
+if [ "$IMAGE_ARCH" = "arm64" ]; then
+  echo "  gcloud compute images create postgres-ubuntu-2204-${IMAGE_ARCH}-YYYYMMDD \\"
+  echo "    --source-uri=gs://BUCKET/postgres-${IMAGE_ARCH}-gce-image.tar.gz \\"
+  echo "    --family=postgres-ubuntu-2204 \\"
+  echo "    --guest-os-features=GVNIC,UEFI_COMPATIBLE"
+else
+  echo "  gcloud compute images create postgres-ubuntu-2204-${IMAGE_ARCH}-YYYYMMDD \\"
+  echo "    --source-uri=gs://BUCKET/postgres-${IMAGE_ARCH}-gce-image.tar.gz \\"
+  echo "    --family=postgres-ubuntu-2204 \\"
+  echo "    --guest-os-features=VIRTIO_SCSI_MULTIQUEUE,GVNIC"
+fi
