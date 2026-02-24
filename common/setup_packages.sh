@@ -2,6 +2,8 @@
 set -uexo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
+export HOME=/root
+export GOPATH=/root/go
 
 # Read architecture from build_arch.env
 source /tmp/build_arch.env
