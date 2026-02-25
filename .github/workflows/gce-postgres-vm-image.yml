@@ -9,7 +9,7 @@ on:
       image_resize_gb:
         description: "Target final image size in GB"
         required: true
-        default: 8
+        default: 10
         type: number
       build_only:
         description: "Build only (skip upload and image creation)"
@@ -230,6 +230,7 @@ jobs:
             --project="${project}" \
             --source-uri="gs://${bucket}/${tar_file}" \
             --guest-os-features=GVNIC,UEFI_COMPATIBLE \
+            --architecture=ARM64 \
             --labels="source=postgres-vm-images,commit=${commit_sha:0:8},arch=arm64"
 
           echo "image_name=${image_name}" >> $GITHUB_OUTPUT
