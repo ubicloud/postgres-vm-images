@@ -126,6 +126,17 @@ jobs:
           echo "- Commit: ${commit_sha:0:8}" >> $GITHUB_STEP_SUMMARY
           echo "- **Not auto-deployed** — merge the PR migration to promote" >> $GITHUB_STEP_SUMMARY
 
+      - name: Make image public
+        if: ${{ !inputs.build_only }}
+        run: |
+          image_name="${{ steps.set_image_name.outputs.image_name }}"
+          project="${{ inputs.gcp_project }}"
+          echo "Granting public access to ${image_name}..."
+          gcloud compute images add-iam-policy-binding "${image_name}" \
+            --project="${project}" \
+            --member="allAuthenticatedUsers" \
+            --role="roles/compute.imageUser"
+
       - name: Verify image
         if: ${{ !inputs.build_only }}
         run: |
@@ -241,6 +252,17 @@ jobs:
           echo "- Project: ${project}" >> $GITHUB_STEP_SUMMARY
           echo "- Commit: ${commit_sha:0:8}" >> $GITHUB_STEP_SUMMARY
           echo "- **Not auto-deployed** — merge the PR migration to promote" >> $GITHUB_STEP_SUMMARY
+
+      - name: Make image public
+        if: ${{ !inputs.build_only }}
+        run: |
+          image_name="${{ steps.set_image_name.outputs.image_name }}"
+          project="${{ inputs.gcp_project }}"
+          echo "Granting public access to ${image_name}..."
+          gcloud compute images add-iam-policy-binding "${image_name}" \
+            --project="${project}" \
+            --member="allAuthenticatedUsers" \
+            --role="roles/compute.imageUser"
 
       - name: Verify image
         if: ${{ !inputs.build_only }}
