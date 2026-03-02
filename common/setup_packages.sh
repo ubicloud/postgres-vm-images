@@ -28,9 +28,10 @@ echo "=== [setup_packages.sh] Building and installing WAL-G ==="
 echo "[setup_packages.sh] Cloning WAL-G repository..."
 mkdir -p /tmp/wal-g
 cd /tmp/wal-g
+export GOEXPERIMENT=jsonv2
 git init
 git remote add origin https://github.com/wal-g/wal-g.git
-git fetch origin --depth 1 6ea13b90a3198bd5c8f8ac2ae323f28e33cf9f06
+git fetch origin --depth 1 f81943e64bdf97aa66f6c52fec55114703f97af7
 git reset --hard FETCH_HEAD
 
 echo "[setup_packages.sh] Running make deps (downloading Go dependencies)..."
