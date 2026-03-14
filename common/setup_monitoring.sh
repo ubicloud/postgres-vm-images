@@ -45,6 +45,7 @@ echo "=== [setup_monitoring.sh] Installing systemd service files ==="
 echo "[setup_monitoring.sh] Copying systemd unit files..."
 cp /tmp/common/assets/prometheus.service /etc/systemd/system/prometheus.service
 cp /tmp/common/assets/node_exporter.service /etc/systemd/system/node_exporter.service
+mkdir -p /var/lib/node_exporter
 cp /tmp/common/assets/postgres_exporter.service /etc/systemd/system/postgres_exporter.service
 cp /tmp/common/assets/wal-g.service /etc/systemd/system/wal-g.service
 

@@ -17,6 +17,8 @@ ExecStart=/usr/bin/node_exporter \
     --collector.meminfo \
     --collector.netdev \
     --collector.uname \
+    --collector.textfile \
+    --collector.textfile.directory=/var/lib/node_exporter \
     --web.disable-exporter-metrics \
     --collector.diskstats.device-exclude="^(z?ram|loop|fd|(h|s|v|xv)d[a-z]|nvme\\d+n\\d+p)\\d+$|vda|vdc" \
     --collector.filesystem.mount-points-exclude="^/(dev|proc|run|sys|var|boot|)($|/)"
