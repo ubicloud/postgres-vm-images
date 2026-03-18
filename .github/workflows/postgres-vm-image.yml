@@ -2,6 +2,10 @@ name: Build PostgreSQL VM Image
 on:
   workflow_dispatch:
     inputs:
+      image_prefix:
+        description: "Prefix for image name (optional)"
+        type: string
+        default: ""
       image_suffix:
         description: "Suffix for image name (e.g., YYYYMMDD.X.Y)"
         type: string
@@ -19,6 +23,10 @@ on:
         description: "Build ARM64 image"
         default: false
         type: boolean
+      run_apt_upgrade:
+        description: "Run apt upgrade during build (can be slow and unnecessary on recently built runners)"
+        default: true
+        type: boolean
       upload_image:
         description: "📤 Upload to MinIO (ignored if build_only)"
         default: false
@@ -34,7 +42,7 @@ on:
       aws_ami_regions:
         description: "AWS regions for AMI"
         type: string
-        default: "us-east-1,us-east-2,eu-west-1,ap-southeast-2"
+        default: "us-west-2,us-east-1,us-east-2,eu-west-1,ap-southeast-2"
       create_ubicloud_pr:
         description: "🔄 Create PR to ubicloud/ubicloud with updated image versions"
         default: false
@@ -43,6 +51,14 @@ on:
         description: "🧪 TEST ONLY: Skip builds, use dummy values to test PR creation"
         default: false
         type: boolean
+      use_aws_role:
+        description: "Use AWS role-based authentication (if false, uses access keys)"
+        default: false
+        type: boolean
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   # x64 build - always runs (unless test_pr_creation is enabled)
@@ -63,9 +79,18 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v3
 
+      - name: Configure AWS credentials (build role)
+        if: ${{ inputs.use_aws_role }}
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ secrets.AWS_BUILD_ROLE_ARN }}
+          role-session-name: postgres-image-${{ job.name }}
+          aws-region: us-west-2
+
       - name: Build image
         run: |
-          sudo ./build.sh ${{ inputs.image_resize_gb }}
+          sudo --preserve-env=AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_SESSION_TOKEN,AWS_REGION,AWS_DEFAULT_REGION \
+            ./build.sh ${{ inputs.image_resize_gb }} ${{ inputs.run_apt_upgrade }}
 
       - name: Install MinIO client
         run: |
@@ -84,9 +109,15 @@ jobs:
       - name: Set image name output
         id: set_image_name
         run: |
-          image_name=postgres-ubuntu-2204-x64-${{ inputs.image_suffix }}
+          base_image_name=postgres-ubuntu-2204-x64-${{ inputs.image_suffix }}
+          if [ -n "${{ inputs.image_prefix }}" ]; then
+            image_name=${{ inputs.image_prefix }}-${base_image_name}
+          else
+            image_name=${base_image_name}
+          fi
           echo "$image_name"
           echo "MINIO_IMAGE_NAME=$image_name" >> $GITHUB_OUTPUT
+          echo "S3_BUCKET_IMAGE_PREFIX=${{ github.run_number }}" >> $GITHUB_OUTPUT
 
       - name: Rename image file and compute SHA256
         id: compute_sha
@@ -147,19 +178,32 @@ jobs:
           sudo ./aws/install --update
           aws --version
 
+      - name: Configure AWS credentials (role)
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only && inputs.use_aws_role }}
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: postgres-image-${{ job.name }}
+          aws-region: us-west-2
+
+      - name: Configure AWS credentials (access keys)
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only && !inputs.use_aws_role }}
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+
       - name: Upload image to S3
         if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
         id: s3_upload
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: us-west-2
         run: |
           image_filename=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}.raw
           s3_bucket=${{ secrets.AWS_S3_BUCKET }}
+          s3_prefix=${{ steps.set_image_name.outputs.S3_BUCKET_IMAGE_PREFIX }}
 
           echo "Uploading image to S3..."
-          aws s3 cp ./${image_filename} s3://${s3_bucket}/${image_filename}
+          aws s3 cp ./${image_filename} s3://${s3_bucket}/${s3_prefix}/${image_filename}
 
           echo "image_filename=${image_filename}" >> $GITHUB_OUTPUT
           echo "s3_bucket=${s3_bucket}" >> $GITHUB_OUTPUT
@@ -167,13 +211,11 @@ jobs:
       - name: Import snapshot to AWS
         if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
         id: import_snapshot
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: us-west-2
         run: |
           image_filename=${{ steps.s3_upload.outputs.image_filename }}
           s3_bucket=${{ steps.s3_upload.outputs.s3_bucket }}
+          s3_prefix=${{ steps.set_image_name.outputs.S3_BUCKET_IMAGE_PREFIX }}
+          vm_import_role_name="${{ secrets.AWS_VM_IMPORT_ROLE_NAME || 'vmimport' }}"
 
           cat <<EOT > containers.json
           {
@@ -181,17 +223,19 @@ jobs:
             "Format": "raw",
             "UserBucket": {
               "S3Bucket": "${s3_bucket}",
-              "S3Key": "${image_filename}"
+              "S3Key": "${s3_prefix}/${image_filename}"
             }
           }
           EOT
 
           echo "Starting snapshot import..."
+
           import_task_id=$(aws ec2 import-snapshot \
+            --role-name "${vm_import_role_name}" \
             --description "${image_filename}" \
             --disk-container file://containers.json \
-            --query "ImportTaskId" \
-            --output text)
+            --tag-specifications "ResourceType=import-snapshot-task,Tags=[{Key=Name,Value=${image_filename}},{Key=Source,Value=postgres-vm-images},{Key=Architecture,Value=x64}]" \
+            --query ImportTaskId --output text)
 
           echo "Import task ID: ${import_task_id}"
           echo "import_task_id=${import_task_id}" >> $GITHUB_OUTPUT
@@ -199,10 +243,6 @@ jobs:
       - name: Wait for snapshot import completion
         if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
         id: wait_snapshot
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: us-west-2
         run: |
           import_task_id=${{ steps.import_snapshot.outputs.import_task_id }}
 
@@ -238,13 +278,16 @@ jobs:
           echo "Snapshot ID: ${snapshot_id}"
           echo "snapshot_id=${snapshot_id}" >> $GITHUB_OUTPUT
 
+          # Tag the snapshot
+          image_filename=${{ steps.s3_upload.outputs.image_filename }}
+          echo "Tagging snapshot ${snapshot_id}..."
+          aws ec2 create-tags \
+            --resources "${snapshot_id}" \
+            --tags "Key=Name,Value=${image_filename}" "Key=Source,Value=postgres-vm-images" "Key=Architecture,Value=x64"
+
       - name: Register AMI from snapshot
         if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
         id: register_ami
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: us-west-2
         run: |
           ami_name=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}
           snapshot_id=${{ steps.wait_snapshot.outputs.snapshot_id }}
@@ -256,16 +299,13 @@ jobs:
             --boot-mode uefi-preferred \
             --ena-support \
             --root-device-name /dev/sda1 \
-            --block-device-mappings "[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"SnapshotId\":\"${snapshot_id}\",\"VolumeSize\":${{ inputs.image_resize_gb }}}}]" \
+            --block-device-mappings "[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"SnapshotId\":\"${snapshot_id}\",\"VolumeSize\":${{ inputs.image_resize_gb }},\"VolumeType\":\"gp3\"}}]" \
+            --tag-specifications "ResourceType=image,Tags=[{Key=Name,Value=${ami_name}},{Key=Source,Value=postgres-vm-images},{Key=Architecture,Value=x64}]" \
             --query "ImageId" \
             --output text)
 
           echo "Registered AMI: ${ami_id}"
           echo "ami_id=${ami_id}" >> $GITHUB_OUTPUT
-
-          aws ec2 create-tags \
-            --resources ${ami_id} \
-            --tags Key=Name,Value=${ami_name} Key=Source,Value=postgres-vm-images Key=Architecture,Value=x64
 
           echo "### AWS AMI (x64)" >> $GITHUB_STEP_SUMMARY
           echo "AMI ID: ${ami_id}" >> $GITHUB_STEP_SUMMARY
@@ -277,10 +317,6 @@ jobs:
       - name: Copy AMI to additional regions
         if: ${{ inputs.upload_aws_ami && inputs.aws_ami_regions != '' && !inputs.build_only }}
         id: copy_ami
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: us-west-2
         run: |
           ami_id=${{ steps.register_ami.outputs.ami_id }}
           ami_name=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}
@@ -289,39 +325,53 @@ jobs:
           echo "Copying AMI ${ami_id} to additional regions: ${regions}"
           echo "### AMI Copies (x64)" >> $GITHUB_STEP_SUMMARY
 
-          # Store all AMI IDs for making public later
-          all_ami_ids="us-west-2:${ami_id}"
+          # Store all AMI IDs and account IDs: region:ami_id:account1:account2...
+          all_ami_ids=""
 
           IFS=',' read -ra REGION_ARRAY <<< "$regions"
-          for region in "${REGION_ARRAY[@]}"; do
-            region=$(echo "$region" | xargs)
-            echo "Copying to ${region}..."
+          for entry in "${REGION_ARRAY[@]}"; do
+            entry=$(echo "$entry" | xargs)
+            
+            # Parse region:account1:account2:account3 format
+            IFS=':' read -ra PARTS <<< "$entry"
+            region="${PARTS[0]}"
+            
+            # Extract account IDs for this region
+            account_ids=""
+            for ((i=1; i<${#PARTS[@]}; i++)); do
+              account_ids="${account_ids}:${PARTS[i]}"
+            done
 
-            copied_ami_id=$(aws ec2 copy-image \
-              --source-region us-west-2 \
-              --source-image-id "${ami_id}" \
-              --name "${ami_name}" \
-              --region "${region}" \
-              --query "ImageId" \
-              --output text)
+            copy_args=(
+              --source-region us-west-2
+              --source-image-id "${ami_id}"
+              --name "${ami_name}"
+              --tag-specifications "ResourceType=image,Tags=[{Key=Name,Value=${ami_name}},{Key=Source,Value=postgres-vm-images},{Key=Architecture,Value=x64}]"
+              --region "${region}"
+            )
+
+            kms_key_id="${{ secrets.AWS_AMI_ENCRYPTION_KMS_KEY_ID }}"
+            if [ -n "${kms_key_id}" ]; then
+              copy_args+=(--encrypted --kms-key-id "${kms_key_id}")
+            fi
+
+            copied_ami_id=$(aws ec2 copy-image "${copy_args[@]}" --query "ImageId" --output text)
 
             echo "Copied AMI to ${region}: ${copied_ami_id}"
             echo "- ${region}: ${copied_ami_id}" >> $GITHUB_STEP_SUMMARY
-            all_ami_ids="${all_ami_ids},${region}:${copied_ami_id}"
-
-            aws ec2 create-tags \
-              --resources ${copied_ami_id} \
-              --tags Key=Name,Value=${ami_name} Key=Source,Value=postgres-vm-images Key=Architecture,Value=x64 \
-              --region "${region}"
+            
+            # Store with account IDs: region:ami_id:account1:account2...
+            if [ -z "$all_ami_ids" ]; then
+              all_ami_ids="${region}:${copied_ami_id}${account_ids}"
+            else
+              all_ami_ids="${all_ami_ids},${region}:${copied_ami_id}${account_ids}"
+            fi
           done
 
           echo "all_ami_ids=${all_ami_ids}" >> $GITHUB_OUTPUT
 
-      - name: Wait for AMI copies and make public
+      - name: Wait for AMI copies and share
         if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           ami_id=${{ steps.register_ami.outputs.ami_id }}
           all_ami_ids="${{ steps.copy_ami.outputs.all_ami_ids }}"
@@ -331,13 +381,21 @@ jobs:
             all_ami_ids="us-west-2:${ami_id}"
           fi
 
-          echo "Waiting for AMIs to become available and making them public..."
-          echo "### Public AMIs (x64)" >> $GITHUB_STEP_SUMMARY
+          echo "Waiting for AMIs to become available and configuring permissions..."
+          echo "### AMI Sharing (x64)" >> $GITHUB_STEP_SUMMARY
 
           IFS=',' read -ra AMI_ARRAY <<< "$all_ami_ids"
           for entry in "${AMI_ARRAY[@]}"; do
-            region=$(echo "$entry" | cut -d: -f1)
-            ami=$(echo "$entry" | cut -d: -f2)
+            # Parse region:ami_id:account1:account2...
+            IFS=':' read -ra PARTS <<< "$entry"
+            region="${PARTS[0]}"
+            ami="${PARTS[1]}"
+            
+            # Extract account IDs (if any)
+            account_ids=()
+            for ((i=2; i<${#PARTS[@]}; i++)); do
+              account_ids+=("${PARTS[i]}")
+            done
 
             echo "Waiting for ${ami} in ${region}..."
 
@@ -351,27 +409,80 @@ jobs:
               echo "  State: ${state}, waiting..."
               sleep 20
             done
+            
+            # Check if AMI became available
+            if [ "$state" != "available" ]; then
+              echo "ERROR: AMI ${ami} did not become available within 10 minutes in ${region}"
+              exit 1
+            fi
 
-            # Make AMI public
-            echo "Making ${ami} public in ${region}..."
-            aws ec2 modify-image-attribute \
-              --image-id "${ami}" \
-              --launch-permission "Add=[{Group=all}]" \
-              --region "${region}"
-
-            echo "- ${region}: ${ami} (public)" >> $GITHUB_STEP_SUMMARY
+            # Configure AMI permissions
+            if [ ${#account_ids[@]} -eq 0 ]; then
+              # No account IDs specified - make public
+              echo "Making ${ami} public in ${region}..."
+              aws ec2 modify-image-attribute \
+                --image-id "${ami}" \
+                --launch-permission "Add=[{Group=all}]" \
+                --region "${region}"
+              echo "- ${region}: ${ami} (public)" >> $GITHUB_STEP_SUMMARY
+            else
+              # Account IDs specified - share with specific accounts
+              echo "Sharing ${ami} in ${region} with accounts: ${account_ids[*]}..."
+              
+              # Build launch permission list
+              permission_list=""
+              for account_id in "${account_ids[@]}"; do
+                if [ -z "$permission_list" ]; then
+                  permission_list="{UserId=${account_id}}"
+                else
+                  permission_list="${permission_list},{UserId=${account_id}}"
+                fi
+              done
+              
+              aws ec2 modify-image-attribute \
+                --image-id "${ami}" \
+                --launch-permission "Add=[${permission_list}]" \
+                --region "${region}"
+              echo "- ${region}: ${ami} (shared with ${account_ids[*]})" >> $GITHUB_STEP_SUMMARY
+            fi
           done
+
+      - name: Generate AMI IDs artifact
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        run: |
+          all_ami_ids="${{ steps.copy_ami.outputs.all_ami_ids }}"
+          
+          # If no copies were made, use the source AMI
+          if [ -z "$all_ami_ids" ]; then
+            ami_id=${{ steps.register_ami.outputs.ami_id }}
+            all_ami_ids="us-west-2:${ami_id}"
+          fi
+
+          echo "ami_ids:" > ami-ids-x64.yaml
+          IFS=',' read -ra AMI_ARRAY <<< "$all_ami_ids"
+          for entry in "${AMI_ARRAY[@]}"; do
+            IFS=':' read -ra PARTS <<< "$entry"
+            region="${PARTS[0]}"
+            ami="${PARTS[1]}"
+            echo "  ${region}: ${ami}" >> ami-ids-x64.yaml
+          done
+          
+          echo "Generated ami-ids-x64.yaml:"
+          cat ami-ids-x64.yaml
+
+      - name: Upload AMI IDs artifact
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ami-ids-x64
+          path: ami-ids-x64.yaml
 
       - name: Clean up S3
         if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
         continue-on-error: true
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: us-west-2
         run: |
           echo "Cleaning up S3..."
-          aws s3 rm s3://${{ steps.s3_upload.outputs.s3_bucket }}/${{ steps.s3_upload.outputs.image_filename }}
+          aws s3 rm s3://${{ steps.s3_upload.outputs.s3_bucket }}/${{ steps.set_image_name.outputs.S3_BUCKET_IMAGE_PREFIX }}/${{ steps.s3_upload.outputs.image_filename }}
 
   # arm64 build
   build-arm64:
@@ -391,16 +502,31 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v3
 
+      - name: Configure AWS credentials (build role)
+        if: ${{ inputs.use_aws_role }}
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ secrets.AWS_BUILD_ROLE_ARN }}
+          role-session-name: postgres-image-${{ job.name }}
+          aws-region: us-west-2
+
       - name: Build image
         run: |
-          sudo ./build.sh ${{ inputs.image_resize_gb }}
+          sudo --preserve-env=AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_SESSION_TOKEN,AWS_REGION,AWS_DEFAULT_REGION \
+            ./build.sh ${{ inputs.image_resize_gb }} ${{ inputs.run_apt_upgrade }}
 
       - name: Set image name output
         id: set_image_name
         run: |
-          image_name=postgres-ubuntu-2204-arm64-${{ inputs.image_suffix }}
+          base_image_name=postgres-ubuntu-2204-arm64-${{ inputs.image_suffix }}
+          if [ -n "${{ inputs.image_prefix }}" ]; then
+            image_name=${{ inputs.image_prefix }}-${base_image_name}
+          else
+            image_name=${base_image_name}
+          fi
           echo "$image_name"
           echo "IMAGE_NAME=$image_name" >> $GITHUB_OUTPUT
+          echo "S3_BUCKET_IMAGE_PREFIX=${{ github.run_number }}" >> $GITHUB_OUTPUT
 
       - name: Rename image file and compute SHA256
         id: compute_sha
@@ -424,19 +550,34 @@ jobs:
           sudo ./aws/install --update
           aws --version
 
+      - name: Configure AWS credentials (role)
+        if: ${{ !inputs.build_only && inputs.use_aws_role }}
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: postgres-image-${{ job.name }}
+          aws-region: us-west-2
+
+      - name: Configure AWS credentials (access keys)
+        if: ${{ !inputs.build_only && !inputs.use_aws_role }}
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+
       - name: Upload image to S3
         if: ${{ !inputs.build_only }}
         id: s3_upload
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: us-west-2
         run: |
           image_filename=${{ steps.set_image_name.outputs.IMAGE_NAME }}.raw
           s3_bucket=${{ secrets.AWS_S3_BUCKET }}
 
           echo "Uploading image to S3..."
-          aws s3 cp ./${image_filename} s3://${s3_bucket}/${image_filename}
+          s3_prefix=${{ steps.set_image_name.outputs.S3_BUCKET_IMAGE_PREFIX }}
+
+          echo "Uploading image to S3..."
+          aws s3 cp ./${image_filename} s3://${s3_bucket}/${s3_prefix}/${image_filename}
 
           echo "image_filename=${image_filename}" >> $GITHUB_OUTPUT
           echo "s3_bucket=${s3_bucket}" >> $GITHUB_OUTPUT
@@ -444,13 +585,11 @@ jobs:
       - name: Import snapshot to AWS
         if: ${{ !inputs.build_only }}
         id: import_snapshot
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: us-west-2
         run: |
           image_filename=${{ steps.s3_upload.outputs.image_filename }}
           s3_bucket=${{ steps.s3_upload.outputs.s3_bucket }}
+          s3_prefix=${{ steps.set_image_name.outputs.S3_BUCKET_IMAGE_PREFIX }}
+          vm_import_role_name="${{ secrets.AWS_VM_IMPORT_ROLE_NAME || 'vmimport' }}"
 
           cat <<EOT > containers.json
           {
@@ -458,17 +597,19 @@ jobs:
             "Format": "raw",
             "UserBucket": {
               "S3Bucket": "${s3_bucket}",
-              "S3Key": "${image_filename}"
+              "S3Key": "${s3_prefix}/${image_filename}"
             }
           }
           EOT
 
           echo "Starting snapshot import..."
+
           import_task_id=$(aws ec2 import-snapshot \
+            --role-name "${vm_import_role_name}" \
             --description "${image_filename}" \
             --disk-container file://containers.json \
-            --query "ImportTaskId" \
-            --output text)
+            --tag-specifications "ResourceType=import-snapshot-task,Tags=[{Key=Name,Value=${image_filename}},{Key=Source,Value=postgres-vm-images},{Key=Architecture,Value=arm64}]" \
+            --query ImportTaskId --output text)
 
           echo "Import task ID: ${import_task_id}"
           echo "import_task_id=${import_task_id}" >> $GITHUB_OUTPUT
@@ -476,10 +617,6 @@ jobs:
       - name: Wait for snapshot import completion
         if: ${{ !inputs.build_only }}
         id: wait_snapshot
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: us-west-2
         run: |
           import_task_id=${{ steps.import_snapshot.outputs.import_task_id }}
 
@@ -515,13 +652,16 @@ jobs:
           echo "Snapshot ID: ${snapshot_id}"
           echo "snapshot_id=${snapshot_id}" >> $GITHUB_OUTPUT
 
+          # Tag the snapshot
+          image_filename=${{ steps.s3_upload.outputs.image_filename }}
+          echo "Tagging snapshot ${snapshot_id}..."
+          aws ec2 create-tags \
+            --resources "${snapshot_id}" \
+            --tags "Key=Name,Value=${image_filename}" "Key=Source,Value=postgres-vm-images" "Key=Architecture,Value=arm64"
+
       - name: Register AMI from snapshot
         if: ${{ !inputs.build_only }}
         id: register_ami
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: us-west-2
         run: |
           ami_name=${{ steps.set_image_name.outputs.IMAGE_NAME }}
           snapshot_id=${{ steps.wait_snapshot.outputs.snapshot_id }}
@@ -534,15 +674,12 @@ jobs:
             --ena-support \
             --root-device-name /dev/sda1 \
             --block-device-mappings "[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"SnapshotId\":\"${snapshot_id}\",\"VolumeSize\":${{ inputs.image_resize_gb }}}}]" \
+            --tag-specifications "ResourceType=image,Tags=[{Key=Name,Value=${ami_name}},{Key=Source,Value=postgres-vm-images},{Key=Architecture,Value=arm64}]" \
             --query "ImageId" \
             --output text)
 
           echo "Registered AMI: ${ami_id}"
           echo "ami_id=${ami_id}" >> $GITHUB_OUTPUT
-
-          aws ec2 create-tags \
-            --resources ${ami_id} \
-            --tags Key=Name,Value=${ami_name} Key=Source,Value=postgres-vm-images Key=Architecture,Value=arm64
 
           echo "### AWS AMI (arm64)" >> $GITHUB_STEP_SUMMARY
           echo "AMI ID: ${ami_id}" >> $GITHUB_STEP_SUMMARY
@@ -554,10 +691,6 @@ jobs:
       - name: Copy AMI to additional regions
         if: ${{ inputs.aws_ami_regions != '' && !inputs.build_only }}
         id: copy_ami
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: us-west-2
         run: |
           ami_id=${{ steps.register_ami.outputs.ami_id }}
           ami_name=${{ steps.set_image_name.outputs.IMAGE_NAME }}
@@ -566,39 +699,53 @@ jobs:
           echo "Copying AMI ${ami_id} to additional regions: ${regions}"
           echo "### AMI Copies (arm64)" >> $GITHUB_STEP_SUMMARY
 
-          # Store all AMI IDs for making public later
-          all_ami_ids="us-west-2:${ami_id}"
+          # Store all AMI IDs and account IDs: region:ami_id:account1:account2...
+          all_ami_ids=""
 
           IFS=',' read -ra REGION_ARRAY <<< "$regions"
-          for region in "${REGION_ARRAY[@]}"; do
-            region=$(echo "$region" | xargs)
-            echo "Copying to ${region}..."
+          for entry in "${REGION_ARRAY[@]}"; do
+            entry=$(echo "$entry" | xargs)
+            
+            # Parse region:account1:account2:account3 format
+            IFS=':' read -ra PARTS <<< "$entry"
+            region="${PARTS[0]}"
+            
+            # Extract account IDs for this region
+            account_ids=""
+            for ((i=1; i<${#PARTS[@]}; i++)); do
+              account_ids="${account_ids}:${PARTS[i]}"
+            done
 
-            copied_ami_id=$(aws ec2 copy-image \
-              --source-region us-west-2 \
-              --source-image-id "${ami_id}" \
-              --name "${ami_name}" \
-              --region "${region}" \
-              --query "ImageId" \
-              --output text)
+            copy_args=(
+              --source-region us-west-2
+              --source-image-id "${ami_id}"
+              --name "${ami_name}"
+              --tag-specifications "ResourceType=image,Tags=[{Key=Name,Value=${ami_name}},{Key=Source,Value=postgres-vm-images},{Key=Architecture,Value=arm64}]"
+              --region "${region}"
+            )
+
+            kms_key_id="${{ secrets.AWS_AMI_ENCRYPTION_KMS_KEY_ID }}"
+            if [ -n "${kms_key_id}" ]; then
+              copy_args+=(--encrypted --kms-key-id "${kms_key_id}")
+            fi
+
+            copied_ami_id=$(aws ec2 copy-image "${copy_args[@]}" --query "ImageId" --output text)
 
             echo "Copied AMI to ${region}: ${copied_ami_id}"
             echo "- ${region}: ${copied_ami_id}" >> $GITHUB_STEP_SUMMARY
-            all_ami_ids="${all_ami_ids},${region}:${copied_ami_id}"
-
-            aws ec2 create-tags \
-              --resources ${copied_ami_id} \
-              --tags Key=Name,Value=${ami_name} Key=Source,Value=postgres-vm-images Key=Architecture,Value=arm64 \
-              --region "${region}"
+            
+            # Store with account IDs: region:ami_id:account1:account2...
+            if [ -z "$all_ami_ids" ]; then
+              all_ami_ids="${region}:${copied_ami_id}${account_ids}"
+            else
+              all_ami_ids="${all_ami_ids},${region}:${copied_ami_id}${account_ids}"
+            fi
           done
 
           echo "all_ami_ids=${all_ami_ids}" >> $GITHUB_OUTPUT
 
-      - name: Wait for AMI copies and make public
+      - name: Wait for AMI copies and share
         if: ${{ !inputs.build_only }}
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           ami_id=${{ steps.register_ami.outputs.ami_id }}
           all_ami_ids="${{ steps.copy_ami.outputs.all_ami_ids }}"
@@ -608,13 +755,21 @@ jobs:
             all_ami_ids="us-west-2:${ami_id}"
           fi
 
-          echo "Waiting for AMIs to become available and making them public..."
-          echo "### Public AMIs (arm64)" >> $GITHUB_STEP_SUMMARY
+          echo "Waiting for AMIs to become available and configuring permissions..."
+          echo "### AMI Sharing (arm64)" >> $GITHUB_STEP_SUMMARY
 
           IFS=',' read -ra AMI_ARRAY <<< "$all_ami_ids"
           for entry in "${AMI_ARRAY[@]}"; do
-            region=$(echo "$entry" | cut -d: -f1)
-            ami=$(echo "$entry" | cut -d: -f2)
+            # Parse region:ami_id:account1:account2...
+            IFS=':' read -ra PARTS <<< "$entry"
+            region="${PARTS[0]}"
+            ami="${PARTS[1]}"
+            
+            # Extract account IDs (if any)
+            account_ids=()
+            for ((i=2; i<${#PARTS[@]}; i++)); do
+              account_ids+=("${PARTS[i]}")
+            done
 
             echo "Waiting for ${ami} in ${region}..."
 
@@ -628,27 +783,80 @@ jobs:
               echo "  State: ${state}, waiting..."
               sleep 20
             done
+            
+            # Check if AMI became available
+            if [ "$state" != "available" ]; then
+              echo "ERROR: AMI ${ami} did not become available within 10 minutes in ${region}"
+              exit 1
+            fi
 
-            # Make AMI public
-            echo "Making ${ami} public in ${region}..."
-            aws ec2 modify-image-attribute \
-              --image-id "${ami}" \
-              --launch-permission "Add=[{Group=all}]" \
-              --region "${region}"
-
-            echo "- ${region}: ${ami} (public)" >> $GITHUB_STEP_SUMMARY
+            # Configure AMI permissions
+            if [ ${#account_ids[@]} -eq 0 ]; then
+              # No account IDs specified - make public
+              echo "Making ${ami} public in ${region}..."
+              aws ec2 modify-image-attribute \
+                --image-id "${ami}" \
+                --launch-permission "Add=[{Group=all}]" \
+                --region "${region}"
+              echo "- ${region}: ${ami} (public)" >> $GITHUB_STEP_SUMMARY
+            else
+              # Account IDs specified - share with specific accounts
+              echo "Sharing ${ami} in ${region} with accounts: ${account_ids[*]}..."
+              
+              # Build launch permission list
+              permission_list=""
+              for account_id in "${account_ids[@]}"; do
+                if [ -z "$permission_list" ]; then
+                  permission_list="{UserId=${account_id}}"
+                else
+                  permission_list="${permission_list},{UserId=${account_id}}"
+                fi
+              done
+              
+              aws ec2 modify-image-attribute \
+                --image-id "${ami}" \
+                --launch-permission "Add=[${permission_list}]" \
+                --region "${region}"
+              echo "- ${region}: ${ami} (shared with ${account_ids[*]})" >> $GITHUB_STEP_SUMMARY
+            fi
           done
+
+      - name: Generate AMI IDs artifact
+        if: ${{ !inputs.build_only }}
+        run: |
+          all_ami_ids="${{ steps.copy_ami.outputs.all_ami_ids }}"
+          
+          # If no copies were made, use the source AMI
+          if [ -z "$all_ami_ids" ]; then
+            ami_id=${{ steps.register_ami.outputs.ami_id }}
+            all_ami_ids="us-west-2:${ami_id}"
+          fi
+
+          echo "ami_ids:" > ami-ids-arm64.yaml
+          IFS=',' read -ra AMI_ARRAY <<< "$all_ami_ids"
+          for entry in "${AMI_ARRAY[@]}"; do
+            IFS=':' read -ra PARTS <<< "$entry"
+            region="${PARTS[0]}"
+            ami="${PARTS[1]}"
+            echo "  ${region}: ${ami}" >> ami-ids-arm64.yaml
+          done
+          
+          echo "Generated ami-ids-arm64.yaml:"
+          cat ami-ids-arm64.yaml
+
+      - name: Upload AMI IDs artifact
+        if: ${{ !inputs.build_only }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ami-ids-arm64
+          path: ami-ids-arm64.yaml
 
       - name: Clean up S3
         if: ${{ !inputs.build_only }}
         continue-on-error: true
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: us-west-2
         run: |
           echo "Cleaning up S3..."
-          aws s3 rm s3://${{ steps.s3_upload.outputs.s3_bucket }}/${{ steps.s3_upload.outputs.image_filename }}
+          aws s3 rm s3://${{ steps.s3_upload.outputs.s3_bucket }}/${{ steps.set_image_name.outputs.S3_BUCKET_IMAGE_PREFIX }}/${{ steps.s3_upload.outputs.image_filename }}
 
   # Create PR to ubicloud/ubicloud with updated image versions
   create-ubicloud-pr:
