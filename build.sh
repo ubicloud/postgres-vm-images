@@ -28,12 +28,12 @@ echo "=== Detected architecture: $HOST_ARCH (Ubuntu: $UBUNTU_ARCH, Image: $IMAGE
 echo "=== Building PostgreSQL image (${TARGET_SIZE_GB}GB) ==="
 
 # Install dependencies
-apt update
-[ "$RUN_APT_UPGRADE" = "true" ] && apt -y upgrade
-apt install -y qemu-utils kpartx parted
+apt-get update
+[ "$RUN_APT_UPGRADE" = "true" ] && apt-get -y upgrade
+apt-get install -y qemu-utils kpartx parted
 
 # Install guestfs-tools for virt-resize (used only for initial image resizing)
-apt install -y guestfs-tools
+apt-get install -y guestfs-tools
 chmod 0644 /boot/vmlinuz*
 
 # Download Ubuntu cloud image for detected architecture
