@@ -1,0 +1,5 @@
+# Vector configuration placeholder — configure at deployment time.
+# See https://vector.dev/docs/reference/configuration/
+
+sources: {}
+sinks: {}

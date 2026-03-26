@@ -39,6 +39,23 @@ cp /tmp/postgres_exporter-0.15.0.linux-${PROM_ARCH}/postgres_exporter /usr/bin/p
 chown ubi_monitoring:ubi_monitoring /usr/bin/postgres_exporter
 chmod 100 /usr/bin/postgres_exporter
 
+VECTOR_VERSION="0.54.0"
+
+# Install Vector
+echo "[setup_monitoring.sh] Downloading Vector v${VECTOR_VERSION}..."
+case $ARCH in
+  x86_64)  VECTOR_ARCH="x86_64" ;;
+  aarch64) VECTOR_ARCH="aarch64" ;;
+esac
+wget https://github.com/vectordotdev/vector/releases/download/v${VECTOR_VERSION}/vector-${VECTOR_VERSION}-${VECTOR_ARCH}-unknown-linux-musl.tar.gz -P /tmp
+tar -xzvf /tmp/vector-${VECTOR_VERSION}-${VECTOR_ARCH}-unknown-linux-musl.tar.gz -C /tmp
+cp /tmp/vector-${VECTOR_ARCH}-unknown-linux-musl/bin/vector /usr/bin/vector
+chown prometheus:prometheus /usr/bin/vector
+chmod 100 /usr/bin/vector
+mkdir -p /etc/vector
+cp /tmp/common/assets/vector/vector.yaml /etc/vector/vector.yaml
+chown -R prometheus:prometheus /etc/vector
+
 echo "=== [setup_monitoring.sh] Installing systemd service files ==="
 
 # Copy systemd unit files
@@ -48,6 +65,7 @@ cp /tmp/common/assets/node_exporter.service /etc/systemd/system/node_exporter.se
 mkdir -p /var/lib/node_exporter
 cp /tmp/common/assets/postgres_exporter.service /etc/systemd/system/postgres_exporter.service
 cp /tmp/common/assets/wal-g.service /etc/systemd/system/wal-g.service
+cp /tmp/common/assets/vector.service /etc/systemd/system/vector.service
 
 # Copy postgres_exporter queries
 mkdir -p /usr/local/share/postgresql
