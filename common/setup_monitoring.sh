@@ -39,6 +39,14 @@ cp /tmp/postgres_exporter-0.15.0.linux-${PROM_ARCH}/postgres_exporter /usr/bin/p
 chown ubi_monitoring:ubi_monitoring /usr/bin/postgres_exporter
 chmod 100 /usr/bin/postgres_exporter
 
+# Install otelcol-contrib
+OTEL_VERSION="0.146.0"
+echo "[setup_monitoring.sh] Downloading otelcol-contrib v${OTEL_VERSION}..."
+curl -L -o otelcol-contrib.deb "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v${OTEL_VERSION}/otelcol-contrib_${OTEL_VERSION}_linux_${PROM_ARCH}.deb"
+dpkg -i otelcol-contrib.deb
+rm -f otelcol-contrib.deb
+apt-get install -y acl
+
 echo "=== [setup_monitoring.sh] Installing systemd service files ==="
 
 # Copy systemd unit files
