@@ -93,6 +93,18 @@ pushd "$PACKAGE_CACHE/common" > /dev/null
 xargs -a /usr/local/share/postgresql/packages/common.txt apt-get download
 popd > /dev/null
 
+# Download VectorChord extension packages from GitHub releases
+# Not available in PostgreSQL APT repo, so downloaded separately
+echo "[setup_base.sh] Downloading VectorChord extension packages..."
+VCHORD_VERSION="1.1.1"
+VCHORD_VERSION_FULL="1.1.1-1"
+UBUNTU_ARCH=$(dpkg --print-architecture)
+for version in 16 17 18; do
+    echo "[setup_base.sh] Downloading VectorChord for PostgreSQL $version ($UBUNTU_ARCH)..."
+    curl -L -o "$PACKAGE_CACHE/$version/postgresql-${version}-vchord.deb" \
+        "https://github.com/tensorchord/VectorChord/releases/download/${VCHORD_VERSION}/postgresql-${version}-vchord_${VCHORD_VERSION_FULL}_${UBUNTU_ARCH}.deb"
+done
+
 echo "[setup_base.sh] Package cache contents:"
 ls -la "$PACKAGE_CACHE"/*
 
