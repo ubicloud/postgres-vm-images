@@ -166,10 +166,3 @@ pg_stat_database_conflicts:
     - confl_active_logicalslot:
         usage: "COUNTER"
         description: "Total queries canceled due to active logical replication slots across all databases (PG 14+)"
-
-pg_wal_archive_status:
-  query: "SELECT get_wal_ready_count() AS ready_count"
-  metrics:
-    - ready_count:
-        usage: "GAUGE"
-        description: "Number of WAL segments ready to be archived (.ready files)"
