@@ -89,6 +89,12 @@ jobs:
 
       - name: Build image
         run: |
+          if [ "${{ inputs.use_aws_role }}" != "true" ]; then
+            export AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}"
+            export AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+            export AWS_REGION=us-west-2
+            export AWS_DEFAULT_REGION=us-west-2
+          fi
           sudo --preserve-env=AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_SESSION_TOKEN,AWS_REGION,AWS_DEFAULT_REGION \
             ./build.sh ${{ inputs.image_resize_gb }} ${{ inputs.run_apt_upgrade }}
 
@@ -512,6 +518,12 @@ jobs:
 
       - name: Build image
         run: |
+          if [ "${{ inputs.use_aws_role }}" != "true" ]; then
+            export AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}"
+            export AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+            export AWS_REGION=us-west-2
+            export AWS_DEFAULT_REGION=us-west-2
+          fi
           sudo --preserve-env=AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_SESSION_TOKEN,AWS_REGION,AWS_DEFAULT_REGION \
             ./build.sh ${{ inputs.image_resize_gb }} ${{ inputs.run_apt_upgrade }}
 
