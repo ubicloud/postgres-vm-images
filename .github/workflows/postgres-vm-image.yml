@@ -55,6 +55,18 @@ on:
         description: "Use AWS role-based authentication (if false, uses access keys)"
         default: false
         type: boolean
+      upload_gce:
+        description: "📤 Create GCE image"
+        default: false
+        type: boolean
+      gcp_project:
+        description: "GCP project ID for GCE image"
+        type: string
+        default: "pelagic-logic-394811"
+      gcs_bucket:
+        description: "GCS bucket for GCE image upload"
+        type: string
+        default: "ubicloud-gce-images"
 
 permissions:
   id-token: write
@@ -70,6 +82,8 @@ jobs:
       sha256: ${{ steps.compute_sha.outputs.sha256 }}
       all_ami_ids: ${{ steps.copy_ami.outputs.all_ami_ids }}
       source_ami_id: ${{ steps.register_ami.outputs.ami_id }}
+      gce_image_name: ${{ steps.create_gce_image.outputs.image_name }}
+      gce_image_project: ${{ steps.create_gce_image.outputs.image_project }}
     steps:
       - name: Print inputs
         run: |
@@ -490,6 +504,110 @@ jobs:
           echo "Cleaning up S3..."
           aws s3 rm s3://${{ steps.s3_upload.outputs.s3_bucket }}/${{ steps.set_image_name.outputs.S3_BUCKET_IMAGE_PREFIX }}/${{ steps.s3_upload.outputs.image_filename }}
 
+      # === GCE Image Steps ===
+      - name: GCE post-processing
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        run: |
+          image_filename=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}.raw
+          cp "${image_filename}" postgres-x64-gce-work.raw
+          sudo ./gce-postprocess.sh postgres-x64-gce-work.raw
+          rm -f postgres-x64-gce-work.raw
+
+      - name: Set GCE image name
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        id: set_gce_image_name
+        run: |
+          gce_image_name="postgres-ubuntu-2204-x64-${{ inputs.image_suffix }}"
+          echo "gce_image_name=${gce_image_name}" >> $GITHUB_OUTPUT
+          echo "GCE Image name: ${gce_image_name}"
+
+      - name: Rename GCE tar.gz and compute SHA256
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        run: |
+          gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
+          mv postgres-x64-gce-image.tar.gz "${gce_image_name}.tar.gz"
+          sha256sum "${gce_image_name}.tar.gz" > "${gce_image_name}.tar.gz.sha256"
+
+          echo "### GCE Image (x64)" >> $GITHUB_STEP_SUMMARY
+          du -h "${gce_image_name}.tar.gz" >> $GITHUB_STEP_SUMMARY
+          echo "### GCE SHA256" >> $GITHUB_STEP_SUMMARY
+          cat "${gce_image_name}.tar.gz.sha256" >> $GITHUB_STEP_SUMMARY
+
+      - name: Authenticate to GCP
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Upload to GCS
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        run: |
+          gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
+          tar_file="${gce_image_name}.tar.gz"
+          bucket="${{ inputs.gcs_bucket }}"
+
+          echo "Uploading ${tar_file} to gs://${bucket}/..."
+          gcloud storage cp "${tar_file}" "gs://${bucket}/${tar_file}"
+
+          echo "### GCS Upload (x64)" >> $GITHUB_STEP_SUMMARY
+          echo "Uploaded to gs://${bucket}/${tar_file}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Create GCE image
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        id: create_gce_image
+        run: |
+          gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
+          tar_file="${gce_image_name}.tar.gz"
+          bucket="${{ inputs.gcs_bucket }}"
+          project="${{ inputs.gcp_project }}"
+          commit_sha="${{ github.sha }}"
+
+          echo "Creating GCE image: ${gce_image_name}"
+          gcloud compute images create "${gce_image_name}" \
+            --project="${project}" \
+            --source-uri="gs://${bucket}/${tar_file}" \
+            --guest-os-features=VIRTIO_SCSI_MULTIQUEUE,GVNIC \
+            --labels="source=postgres-vm-images,commit=${commit_sha:0:8},arch=x64"
+
+          echo "image_name=${gce_image_name}" >> $GITHUB_OUTPUT
+          echo "image_project=${project}" >> $GITHUB_OUTPUT
+
+          echo "### GCE Image Created (x64)" >> $GITHUB_STEP_SUMMARY
+          echo "- Name: ${gce_image_name}" >> $GITHUB_STEP_SUMMARY
+          echo "- Project: ${project}" >> $GITHUB_STEP_SUMMARY
+          echo "- Commit: ${commit_sha:0:8}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Make GCE image public
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        run: |
+          gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
+          project="${{ inputs.gcp_project }}"
+          gcloud compute images add-iam-policy-binding "${gce_image_name}" \
+            --project="${project}" \
+            --member="allAuthenticatedUsers" \
+            --role="roles/compute.imageUser"
+
+      - name: Verify GCE image
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        run: |
+          gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
+          project="${{ inputs.gcp_project }}"
+          gcloud compute images describe "${gce_image_name}" \
+            --project="${project}" \
+            --format="table(name,family,status,diskSizeGb,creationTimestamp)"
+
+      - name: Clean up GCS tar.gz
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        continue-on-error: true
+        run: |
+          gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
+          bucket="${{ inputs.gcs_bucket }}"
+          gcloud storage rm "gs://${bucket}/${gce_image_name}.tar.gz"
+
   # arm64 build
   build-arm64:
     name: Build postgres-ubuntu-2204-arm64-${{ inputs.image_suffix }}
@@ -499,6 +617,8 @@ jobs:
       sha256: ${{ steps.compute_sha.outputs.sha256 }}
       all_ami_ids: ${{ steps.copy_ami.outputs.all_ami_ids }}
       source_ami_id: ${{ steps.register_ami.outputs.ami_id }}
+      gce_image_name: ${{ steps.create_gce_image.outputs.image_name }}
+      gce_image_project: ${{ steps.create_gce_image.outputs.image_project }}
     steps:
       - name: Print inputs
         run: |
@@ -870,6 +990,111 @@ jobs:
           echo "Cleaning up S3..."
           aws s3 rm s3://${{ steps.s3_upload.outputs.s3_bucket }}/${{ steps.set_image_name.outputs.S3_BUCKET_IMAGE_PREFIX }}/${{ steps.s3_upload.outputs.image_filename }}
 
+      # === GCE Image Steps ===
+      - name: GCE post-processing
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        run: |
+          image_filename=${{ steps.set_image_name.outputs.IMAGE_NAME }}.raw
+          cp "${image_filename}" postgres-arm64-gce-work.raw
+          sudo ./gce-postprocess.sh postgres-arm64-gce-work.raw
+          rm -f postgres-arm64-gce-work.raw
+
+      - name: Set GCE image name
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        id: set_gce_image_name
+        run: |
+          gce_image_name="postgres-ubuntu-2204-arm64-${{ inputs.image_suffix }}"
+          echo "gce_image_name=${gce_image_name}" >> $GITHUB_OUTPUT
+          echo "GCE Image name: ${gce_image_name}"
+
+      - name: Rename GCE tar.gz and compute SHA256
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        run: |
+          gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
+          mv postgres-arm64-gce-image.tar.gz "${gce_image_name}.tar.gz"
+          sha256sum "${gce_image_name}.tar.gz" > "${gce_image_name}.tar.gz.sha256"
+
+          echo "### GCE Image (arm64)" >> $GITHUB_STEP_SUMMARY
+          du -h "${gce_image_name}.tar.gz" >> $GITHUB_STEP_SUMMARY
+          echo "### GCE SHA256" >> $GITHUB_STEP_SUMMARY
+          cat "${gce_image_name}.tar.gz.sha256" >> $GITHUB_STEP_SUMMARY
+
+      - name: Authenticate to GCP
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Upload to GCS
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        run: |
+          gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
+          tar_file="${gce_image_name}.tar.gz"
+          bucket="${{ inputs.gcs_bucket }}"
+
+          echo "Uploading ${tar_file} to gs://${bucket}/..."
+          gcloud storage cp "${tar_file}" "gs://${bucket}/${tar_file}"
+
+          echo "### GCS Upload (arm64)" >> $GITHUB_STEP_SUMMARY
+          echo "Uploaded to gs://${bucket}/${tar_file}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Create GCE image
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        id: create_gce_image
+        run: |
+          gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
+          tar_file="${gce_image_name}.tar.gz"
+          bucket="${{ inputs.gcs_bucket }}"
+          project="${{ inputs.gcp_project }}"
+          commit_sha="${{ github.sha }}"
+
+          echo "Creating GCE image: ${gce_image_name}"
+          gcloud compute images create "${gce_image_name}" \
+            --project="${project}" \
+            --source-uri="gs://${bucket}/${tar_file}" \
+            --guest-os-features=GVNIC,UEFI_COMPATIBLE \
+            --architecture=ARM64 \
+            --labels="source=postgres-vm-images,commit=${commit_sha:0:8},arch=arm64"
+
+          echo "image_name=${gce_image_name}" >> $GITHUB_OUTPUT
+          echo "image_project=${project}" >> $GITHUB_OUTPUT
+
+          echo "### GCE Image Created (arm64)" >> $GITHUB_STEP_SUMMARY
+          echo "- Name: ${gce_image_name}" >> $GITHUB_STEP_SUMMARY
+          echo "- Project: ${project}" >> $GITHUB_STEP_SUMMARY
+          echo "- Commit: ${commit_sha:0:8}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Make GCE image public
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        run: |
+          gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
+          project="${{ inputs.gcp_project }}"
+          gcloud compute images add-iam-policy-binding "${gce_image_name}" \
+            --project="${project}" \
+            --member="allAuthenticatedUsers" \
+            --role="roles/compute.imageUser"
+
+      - name: Verify GCE image
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        run: |
+          gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
+          project="${{ inputs.gcp_project }}"
+          gcloud compute images describe "${gce_image_name}" \
+            --project="${project}" \
+            --format="table(name,family,status,diskSizeGb,creationTimestamp)"
+
+      - name: Clean up GCS tar.gz
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        continue-on-error: true
+        run: |
+          gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
+          bucket="${{ inputs.gcs_bucket }}"
+          gcloud storage rm "gs://${bucket}/${gce_image_name}.tar.gz"
+
   # Create PR to ubicloud/ubicloud with updated image versions
   create-ubicloud-pr:
     name: Create PR to ubicloud/ubicloud
@@ -911,6 +1136,11 @@ jobs:
               arm64_amis="us-west-2:${{ needs.build-arm64.outputs.source_ami_id }}"
             fi
             echo "arm64_ami_ids=${arm64_amis}" >> $GITHUB_OUTPUT
+
+            # GCE image names
+            echo "x64_gce_image_name=${{ needs.build-x64.outputs.gce_image_name }}" >> $GITHUB_OUTPUT
+            echo "arm64_gce_image_name=${{ needs.build-arm64.outputs.gce_image_name }}" >> $GITHUB_OUTPUT
+            echo "gce_image_project=${{ needs.build-x64.outputs.gce_image_project }}" >> $GITHUB_OUTPUT
           fi
 
       - name: Clone ubicloud/ubicloud
@@ -1048,6 +1278,56 @@ jobs:
           echo "Created migration file: ${migration_file}"
           cat "${migration_file}"
 
+      - name: Create GCE migration file
+        if: ${{ steps.collect.outputs.x64_gce_image_name != '' || steps.collect.outputs.arm64_gce_image_name != '' }}
+        run: |
+          cd ubicloud
+          timestamp=$(date +%Y%m%d)
+          migration_file="migrate/${timestamp}_update_pg_gce_images.rb"
+
+          x64_gce_image="${{ steps.collect.outputs.x64_gce_image_name }}"
+          arm64_gce_image="${{ steps.collect.outputs.arm64_gce_image_name }}"
+          project="${{ steps.collect.outputs.gce_image_project }}"
+
+          cat > "${migration_file}" << MIGRATION
+          # frozen_string_literal: true
+
+          Sequel.migration do
+            up do
+          MIGRATION
+          sed -i 's/^          //' "${migration_file}"
+
+          if [ -n "$x64_gce_image" ]; then
+            cat >> "${migration_file}" << MIGRATION
+              from(:pg_gce_image)
+                .where(gcp_project_id: "${project}", arch: "x64")
+                .update(gce_image_name: "${x64_gce_image}")
+          MIGRATION
+            sed -i 's/^          //' "${migration_file}"
+          fi
+
+          if [ -n "$arm64_gce_image" ]; then
+            cat >> "${migration_file}" << MIGRATION
+              from(:pg_gce_image)
+                .where(gcp_project_id: "${project}", arch: "arm64")
+                .update(gce_image_name: "${arm64_gce_image}")
+          MIGRATION
+            sed -i 's/^          //' "${migration_file}"
+          fi
+
+          cat >> "${migration_file}" << MIGRATION
+            end
+
+            down do
+              raise Sequel::Error, "irreversible: previous GCE image names unknown"
+            end
+          end
+          MIGRATION
+          sed -i 's/^          //' "${migration_file}"
+
+          echo "Created GCE migration file: ${migration_file}"
+          cat "${migration_file}"
+
       - name: Create Pull Request
         env:
           GH_TOKEN: ${{ secrets.UBICLOUD_REPO_PAT }}
@@ -1092,6 +1372,7 @@ jobs:
           - Updates image version in \`config.rb\`
           - Updates boot image SHA256 hashes in \`prog/download_boot_image.rb\`
           - Adds migration to update AWS AMI IDs in \`pg_aws_ami\` table
+          - Adds migration to update GCE image names in \`pg_gce_image\` table (if GCE images built)
 
           ## Image Version
           \`${{ inputs.image_suffix }}\`
@@ -1099,6 +1380,9 @@ jobs:
           ## Changes
           - x64 SHA256: \`${{ steps.collect.outputs.x64_sha256 }}\`
           - arm64 SHA256: \`${{ steps.collect.outputs.arm64_sha256 }}\`
+          - GCE x64: \`${{ steps.collect.outputs.x64_gce_image_name }}\`
+          - GCE arm64: \`${{ steps.collect.outputs.arm64_gce_image_name }}\`
+          - GCE project: \`${{ steps.collect.outputs.gce_image_project }}\`
 
           🤖 Generated by [postgres-vm-images](https://github.com/ubicloud/postgres-vm-images) workflow"
 

@@ -12,7 +12,7 @@ apt-get -qq -y satisfy 'openssh-server (>= 1:8.9p1-3ubuntu0.10)'
 echo "=== [setup_base.sh] Updating kernel ==="
 
 # Update to kernel 6.8.0-90-generic (Ubuntu 22.04's latest HWE kernel)
-apt-get install -y linux-image-6.8.0-90-generic linux-headers-6.8.0-90-generic linux-tools-6.8.0-90-generic
+apt-get install -y linux-image-6.8.0-90-generic linux-headers-6.8.0-90-generic linux-tools-6.8.0-90-generic linux-modules-extra-6.8.0-90-generic
 
 echo "=== [setup_base.sh] Installing ruby-bundler ==="
 apt-get install -y ruby-bundler
