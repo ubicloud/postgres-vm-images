@@ -1016,14 +1016,9 @@ jobs:
           # Remove leading spaces from heredoc
           sed -i 's/^          //' "${migration_file}"
 
-          # Write entries with proper comma separation
-          total=${#entries[@]}
-          for i in "${!entries[@]}"; do
-            if [ $i -eq $((total - 1)) ]; then
-              echo "${entries[$i]}" >> "${migration_file}"
-            else
-              echo "${entries[$i]}," >> "${migration_file}"
-            fi
+          # Write entries with trailing commas (rubocop Style/TrailingCommaInArrayLiteral)
+          for entry in "${entries[@]}"; do
+            echo "${entry}," >> "${migration_file}"
           done
 
           cat >> "${migration_file}" << 'MIGRATION_FOOTER'
