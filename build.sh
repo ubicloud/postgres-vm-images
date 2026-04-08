@@ -121,9 +121,18 @@ if [ "${UBUNTU_ARCH}" = "arm64" ]; then
     cat ${MOUNT_POINT}/etc/apt/sources.list
 fi
 
+# Download GuardDuty agent .deb (requires AWS credentials on the host)
+echo "=== Downloading GuardDuty agent ==="
+GUARDDUTY_VERSION="1.9.2"
+GUARDDUTY_ACCOUNT_ID="733349766148"
+GUARDDUTY_REGION="us-west-2"
+aws s3 cp "s3://${GUARDDUTY_ACCOUNT_ID}-${GUARDDUTY_REGION}-guardduty-agent-deb-artifacts/${GUARDDUTY_VERSION}/${UBUNTU_ARCH}/amazon-guardduty-agent-${GUARDDUTY_VERSION}.${UBUNTU_ARCH}.deb" \
+  /tmp/amazon-guardduty-agent.deb
+
 # Copy scripts into the mounted image
 echo "=== Copying scripts to image ==="
 cp -r common ${MOUNT_POINT}/tmp/
+cp /tmp/amazon-guardduty-agent.deb ${MOUNT_POINT}/tmp/amazon-guardduty-agent.deb
 
 # Write architecture info
 cat > ${MOUNT_POINT}/tmp/build_arch.env << EOF

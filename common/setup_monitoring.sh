@@ -72,6 +72,14 @@ dpkg -i amazon-cloudwatch-agent.deb
 rm -f amazon-cloudwatch-agent.deb
 
 # =============================================
+# Amazon GuardDuty Agent (for AWS Runtime Monitoring)
+# =============================================
+echo "=== [setup_monitoring.sh] Installing Amazon GuardDuty Agent ==="
+
+dpkg -i /tmp/amazon-guardduty-agent.deb
+rm -f /tmp/amazon-guardduty-agent.deb
+
+# =============================================
 # ClamAV Security Scan
 # =============================================
 echo "=== [setup_monitoring.sh] Installing and running ClamAV scan ==="
