@@ -1,4 +1,6 @@
 name: Build PostgreSQL VM Image
+run-name: Build ${{ inputs.image_suffix }} ${{ inputs.image_prefix }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -337,11 +339,11 @@ jobs:
           IFS=',' read -ra REGION_ARRAY <<< "$regions"
           for entry in "${REGION_ARRAY[@]}"; do
             entry=$(echo "$entry" | xargs)
-            
+
             # Parse region:account1:account2:account3 format
             IFS=':' read -ra PARTS <<< "$entry"
             region="${PARTS[0]}"
-            
+
             # Extract account IDs for this region
             account_ids=""
             for ((i=1; i<${#PARTS[@]}; i++)); do
@@ -365,7 +367,7 @@ jobs:
 
             echo "Copied AMI to ${region}: ${copied_ami_id}"
             echo "- ${region}: ${copied_ami_id}" >> $GITHUB_STEP_SUMMARY
-            
+
             # Store with account IDs: region:ami_id:account1:account2...
             if [ -z "$all_ami_ids" ]; then
               all_ami_ids="${region}:${copied_ami_id}${account_ids}"
@@ -396,7 +398,7 @@ jobs:
             IFS=':' read -ra PARTS <<< "$entry"
             region="${PARTS[0]}"
             ami="${PARTS[1]}"
-            
+
             # Extract account IDs (if any)
             account_ids=()
             for ((i=2; i<${#PARTS[@]}; i++)); do
@@ -415,7 +417,7 @@ jobs:
               echo "  State: ${state}, waiting..."
               sleep 20
             done
-            
+
             # Check if AMI became available
             if [ "$state" != "available" ]; then
               echo "ERROR: AMI ${ami} did not become available within 10 minutes in ${region}"
@@ -434,7 +436,7 @@ jobs:
             else
               # Account IDs specified - share with specific accounts
               echo "Sharing ${ami} in ${region} with accounts: ${account_ids[*]}..."
-              
+
               # Build launch permission list
               permission_list=""
               for account_id in "${account_ids[@]}"; do
@@ -444,7 +446,7 @@ jobs:
                   permission_list="${permission_list},{UserId=${account_id}}"
                 fi
               done
-              
+
               aws ec2 modify-image-attribute \
                 --image-id "${ami}" \
                 --launch-permission "Add=[${permission_list}]" \
@@ -457,7 +459,7 @@ jobs:
         if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
         run: |
           all_ami_ids="${{ steps.copy_ami.outputs.all_ami_ids }}"
-          
+
           # If no copies were made, use the source AMI
           if [ -z "$all_ami_ids" ]; then
             ami_id=${{ steps.register_ami.outputs.ami_id }}
@@ -472,7 +474,7 @@ jobs:
             ami="${PARTS[1]}"
             echo "  ${region}: ${ami}" >> ami-ids-x64.yaml
           done
-          
+
           echo "Generated ami-ids-x64.yaml:"
           cat ami-ids-x64.yaml
 
@@ -717,11 +719,11 @@ jobs:
           IFS=',' read -ra REGION_ARRAY <<< "$regions"
           for entry in "${REGION_ARRAY[@]}"; do
             entry=$(echo "$entry" | xargs)
-            
+
             # Parse region:account1:account2:account3 format
             IFS=':' read -ra PARTS <<< "$entry"
             region="${PARTS[0]}"
-            
+
             # Extract account IDs for this region
             account_ids=""
             for ((i=1; i<${#PARTS[@]}; i++)); do
@@ -745,7 +747,7 @@ jobs:
 
             echo "Copied AMI to ${region}: ${copied_ami_id}"
             echo "- ${region}: ${copied_ami_id}" >> $GITHUB_STEP_SUMMARY
-            
+
             # Store with account IDs: region:ami_id:account1:account2...
             if [ -z "$all_ami_ids" ]; then
               all_ami_ids="${region}:${copied_ami_id}${account_ids}"
@@ -776,7 +778,7 @@ jobs:
             IFS=':' read -ra PARTS <<< "$entry"
             region="${PARTS[0]}"
             ami="${PARTS[1]}"
-            
+
             # Extract account IDs (if any)
             account_ids=()
             for ((i=2; i<${#PARTS[@]}; i++)); do
@@ -795,7 +797,7 @@ jobs:
               echo "  State: ${state}, waiting..."
               sleep 20
             done
-            
+
             # Check if AMI became available
             if [ "$state" != "available" ]; then
               echo "ERROR: AMI ${ami} did not become available within 10 minutes in ${region}"
@@ -814,7 +816,7 @@ jobs:
             else
               # Account IDs specified - share with specific accounts
               echo "Sharing ${ami} in ${region} with accounts: ${account_ids[*]}..."
-              
+
               # Build launch permission list
               permission_list=""
               for account_id in "${account_ids[@]}"; do
@@ -824,7 +826,7 @@ jobs:
                   permission_list="${permission_list},{UserId=${account_id}}"
                 fi
               done
-              
+
               aws ec2 modify-image-attribute \
                 --image-id "${ami}" \
                 --launch-permission "Add=[${permission_list}]" \
@@ -837,7 +839,7 @@ jobs:
         if: ${{ !inputs.build_only }}
         run: |
           all_ami_ids="${{ steps.copy_ami.outputs.all_ami_ids }}"
-          
+
           # If no copies were made, use the source AMI
           if [ -z "$all_ami_ids" ]; then
             ami_id=${{ steps.register_ami.outputs.ami_id }}
@@ -852,7 +854,7 @@ jobs:
             ami="${PARTS[1]}"
             echo "  ${region}: ${ami}" >> ami-ids-arm64.yaml
           done
-          
+
           echo "Generated ami-ids-arm64.yaml:"
           cat ami-ids-arm64.yaml
 
