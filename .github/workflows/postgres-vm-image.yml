@@ -925,36 +925,23 @@ jobs:
           x64_sha="${{ steps.collect.outputs.x64_sha256 }}"
           arm64_sha="${{ steps.collect.outputs.arm64_sha256 }}"
 
-          # Find and replace existing entries for this image (update version AND sha)
-          # Pattern: ["image-name", "arch", "old-version"] => "old-sha",
+          # BOOT_IMAGE_SHA256 uses a nested hash: "image" => { "arch" => { "version" => "sha" } }
+          # Replace the existing "version" => "sha" entry for each arch
           if [ -n "$x64_sha" ]; then
-            # Replace the existing x64 entry with new version and sha
-            sed -i -E "s|\\[\"${image_name}\", \"x64\", \"[^\"]+\"\\] => \"[^\"]+\"|[\"${image_name}\", \"x64\", \"${version}\"] => \"${x64_sha}\"|" prog/download_boot_image.rb
+            # Find the x64 section under this image and replace the version => sha line
+            sed -i "/\"${image_name}\" => {/,/^    },/ { /\"x64\" => {/,/^      },/ s|\"[^\"]*\" => \"[^\"]*\",|\"${version}\" => \"${x64_sha}\",| ; }" prog/download_boot_image.rb
             echo "Updated x64 entry: ${image_name} -> ${version}"
           fi
 
           if [ -n "$arm64_sha" ]; then
-            # Replace the existing arm64 entry with new version and sha
-            sed -i -E "s|\\[\"${image_name}\", \"arm64\", \"[^\"]+\"\\] => \"[^\"]+\"|[\"${image_name}\", \"arm64\", \"${version}\"] => \"${arm64_sha}\"|" prog/download_boot_image.rb
+            # Find the arm64 section under this image and replace the version => sha line
+            sed -i "/\"${image_name}\" => {/,/^    },/ { /\"arm64\" => {/,/^      },/ s|\"[^\"]*\" => \"[^\"]*\",|\"${version}\" => \"${arm64_sha}\",| ; }" prog/download_boot_image.rb
             echo "Updated arm64 entry: ${image_name} -> ${version}"
           fi
 
           # Show the changes
           echo "=== Updated entries ==="
-          grep "${image_name}" prog/download_boot_image.rb || true
-
-      - name: Update config.rb
-        run: |
-          cd ubicloud
-          version="${{ steps.collect.outputs.version }}"
-
-          # Update postgres_ubuntu_2204_version in config.rb
-          sed -i -E "s|(override\s*:postgres_ubuntu_2204_version,\s*\")([^\"]+)(\")|\1${version}\3|" config.rb
-          echo "Updated postgres_ubuntu_2204_version to ${version}"
-
-          # Show the change
-          echo "=== Updated config.rb ==="
-          grep "postgres_ubuntu_2204_version" config.rb
+          grep -A 10 "\"${image_name}\"" prog/download_boot_image.rb || true
 
       - name: Create migration file
         run: |
@@ -1089,8 +1076,7 @@ jobs:
             --head "${branch_name}" \
             --title "Update postgres images to ${{ inputs.image_suffix }}" \
             --body "## Summary
-          - Updates image version in \`config.rb\`
-          - Updates boot image SHA256 hashes in \`prog/download_boot_image.rb\`
+          - Updates boot image version and SHA256 hashes in \`prog/download_boot_image.rb\`
           - Adds migration to update AWS AMI IDs in \`pg_aws_ami\` table
 
           ## Image Version
