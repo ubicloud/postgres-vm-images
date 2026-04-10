@@ -1,4 +1,5 @@
 name: Cleanup Images
+run-name: Cleanup ${{ inputs.image_suffix }} ${{ inputs.architecture }}
 
 on:
   workflow_dispatch:
