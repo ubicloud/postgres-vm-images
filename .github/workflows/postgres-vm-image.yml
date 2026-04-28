@@ -61,10 +61,6 @@ on:
         description: "📤 Create GCE image"
         default: false
         type: boolean
-      gcs_bucket:
-        description: "GCS bucket for GCE image upload"
-        type: string
-        default: "ubicloud-gce-images"
 
 permissions:
   id-token: write
@@ -547,7 +543,7 @@ jobs:
         run: |
           gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
           tar_file="${gce_image_name}.tar.gz"
-          bucket="${{ inputs.gcs_bucket }}"
+          bucket="${{ secrets.GCS_BUCKET }}"
 
           echo "Uploading ${tar_file} to gs://${bucket}/..."
           gcloud storage cp "${tar_file}" "gs://${bucket}/${tar_file}"
@@ -561,7 +557,7 @@ jobs:
         run: |
           gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
           tar_file="${gce_image_name}.tar.gz"
-          bucket="${{ inputs.gcs_bucket }}"
+          bucket="${{ secrets.GCS_BUCKET }}"
           project="${{ steps.gcp_auth.outputs.project_id }}"
           commit_sha="${{ github.sha }}"
 
@@ -604,7 +600,7 @@ jobs:
         continue-on-error: true
         run: |
           gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
-          bucket="${{ inputs.gcs_bucket }}"
+          bucket="${{ secrets.GCS_BUCKET }}"
           gcloud storage rm "gs://${bucket}/${gce_image_name}.tar.gz"
 
   # arm64 build
@@ -1034,7 +1030,7 @@ jobs:
         run: |
           gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
           tar_file="${gce_image_name}.tar.gz"
-          bucket="${{ inputs.gcs_bucket }}"
+          bucket="${{ secrets.GCS_BUCKET }}"
 
           echo "Uploading ${tar_file} to gs://${bucket}/..."
           gcloud storage cp "${tar_file}" "gs://${bucket}/${tar_file}"
@@ -1048,7 +1044,7 @@ jobs:
         run: |
           gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
           tar_file="${gce_image_name}.tar.gz"
-          bucket="${{ inputs.gcs_bucket }}"
+          bucket="${{ secrets.GCS_BUCKET }}"
           project="${{ steps.gcp_auth.outputs.project_id }}"
           commit_sha="${{ github.sha }}"
 
@@ -1092,7 +1088,7 @@ jobs:
         continue-on-error: true
         run: |
           gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
-          bucket="${{ inputs.gcs_bucket }}"
+          bucket="${{ secrets.GCS_BUCKET }}"
           gcloud storage rm "gs://${bucket}/${gce_image_name}.tar.gz"
 
   # Create PR to ubicloud/ubicloud with updated image versions
