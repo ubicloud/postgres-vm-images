@@ -37,6 +37,10 @@ on:
         description: "📤 Upload to R2 (ignored if build_only)"
         default: false
         type: boolean
+      upload_gce:
+        description: "📤 Create GCE image"
+        default: false
+        type: boolean
       upload_aws_ami:
         description: "📤 Create AWS AMI"
         default: false
@@ -55,10 +59,6 @@ on:
         type: boolean
       use_aws_role:
         description: "Use AWS role-based authentication (if false, uses access keys)"
-        default: false
-        type: boolean
-      upload_gce:
-        description: "📤 Create GCE image"
         default: false
         type: boolean
 
