@@ -511,7 +511,10 @@ jobs:
         if: ${{ inputs.upload_gce && !inputs.build_only }}
         id: set_gce_image_name
         run: |
-          gce_image_name="postgres-ubuntu-2204-x64-${{ inputs.image_suffix }}"
+          # GCE image names allow only [a-z0-9-]; image_suffix may contain
+          # dots (e.g. "20260428.1.0"), so swap them for hyphens.
+          suffix="${{ inputs.image_suffix }}"
+          gce_image_name="postgres-ubuntu-2204-x64-${suffix//./-}"
           echo "gce_image_name=${gce_image_name}" >> $GITHUB_OUTPUT
           echo "GCE Image name: ${gce_image_name}"
 
@@ -998,7 +1001,10 @@ jobs:
         if: ${{ inputs.upload_gce && !inputs.build_only }}
         id: set_gce_image_name
         run: |
-          gce_image_name="postgres-ubuntu-2204-arm64-${{ inputs.image_suffix }}"
+          # GCE image names allow only [a-z0-9-]; image_suffix may contain
+          # dots (e.g. "20260428.1.0"), so swap them for hyphens.
+          suffix="${{ inputs.image_suffix }}"
+          gce_image_name="postgres-ubuntu-2204-arm64-${suffix//./-}"
           echo "gce_image_name=${gce_image_name}" >> $GITHUB_OUTPUT
           echo "GCE Image name: ${gce_image_name}"
 
