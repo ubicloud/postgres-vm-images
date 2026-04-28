@@ -61,10 +61,6 @@ on:
         description: "📤 Create GCE image"
         default: false
         type: boolean
-      gcp_project:
-        description: "GCP project ID for GCE image"
-        type: string
-        default: "pelagic-logic-394811"
       gcs_bucket:
         description: "GCS bucket for GCE image upload"
         type: string
@@ -537,6 +533,7 @@ jobs:
 
       - name: Authenticate to GCP
         if: ${{ inputs.upload_gce && !inputs.build_only }}
+        id: gcp_auth
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
@@ -565,7 +562,7 @@ jobs:
           gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
           tar_file="${gce_image_name}.tar.gz"
           bucket="${{ inputs.gcs_bucket }}"
-          project="${{ inputs.gcp_project }}"
+          project="${{ steps.gcp_auth.outputs.project_id }}"
           commit_sha="${{ github.sha }}"
 
           echo "Creating GCE image: ${gce_image_name}"
@@ -587,7 +584,7 @@ jobs:
         if: ${{ inputs.upload_gce && !inputs.build_only }}
         run: |
           gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
-          project="${{ inputs.gcp_project }}"
+          project="${{ steps.gcp_auth.outputs.project_id }}"
           gcloud compute images add-iam-policy-binding "${gce_image_name}" \
             --project="${project}" \
             --member="allAuthenticatedUsers" \
@@ -597,7 +594,7 @@ jobs:
         if: ${{ inputs.upload_gce && !inputs.build_only }}
         run: |
           gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
-          project="${{ inputs.gcp_project }}"
+          project="${{ steps.gcp_auth.outputs.project_id }}"
           gcloud compute images describe "${gce_image_name}" \
             --project="${project}" \
             --format="table(name,family,status,diskSizeGb,creationTimestamp)"
@@ -1023,6 +1020,7 @@ jobs:
 
       - name: Authenticate to GCP
         if: ${{ inputs.upload_gce && !inputs.build_only }}
+        id: gcp_auth
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
@@ -1051,7 +1049,7 @@ jobs:
           gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
           tar_file="${gce_image_name}.tar.gz"
           bucket="${{ inputs.gcs_bucket }}"
-          project="${{ inputs.gcp_project }}"
+          project="${{ steps.gcp_auth.outputs.project_id }}"
           commit_sha="${{ github.sha }}"
 
           echo "Creating GCE image: ${gce_image_name}"
@@ -1074,7 +1072,7 @@ jobs:
         if: ${{ inputs.upload_gce && !inputs.build_only }}
         run: |
           gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
-          project="${{ inputs.gcp_project }}"
+          project="${{ steps.gcp_auth.outputs.project_id }}"
           gcloud compute images add-iam-policy-binding "${gce_image_name}" \
             --project="${project}" \
             --member="allAuthenticatedUsers" \
@@ -1084,7 +1082,7 @@ jobs:
         if: ${{ inputs.upload_gce && !inputs.build_only }}
         run: |
           gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
-          project="${{ inputs.gcp_project }}"
+          project="${{ steps.gcp_auth.outputs.project_id }}"
           gcloud compute images describe "${gce_image_name}" \
             --project="${project}" \
             --format="table(name,family,status,diskSizeGb,creationTimestamp)"
