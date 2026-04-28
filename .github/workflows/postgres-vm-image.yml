@@ -102,7 +102,7 @@ jobs:
 
       - name: Install MinIO client
         run: |
-          curl https://dl.min.io/client/mc/release/linux-amd64/mc -o mc
+          curl -fL https://dl.min.io/client/mc/release/linux-amd64/mc -o mc
           sudo mv mc /usr/bin/mc
           sudo chmod +x /usr/bin/mc
           mc --version
