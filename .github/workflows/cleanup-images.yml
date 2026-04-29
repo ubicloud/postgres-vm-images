@@ -33,14 +33,6 @@ on:
         description: "🗑️ Clean up GCE images and GCS tarballs"
         default: false
         type: boolean
-      gcp_project:
-        description: "GCP project ID for GCE cleanup"
-        type: string
-        default: "pelagic-logic-394811"
-      gcs_bucket:
-        description: "GCS bucket for GCE tarball cleanup"
-        type: string
-        default: "ubicloud-gce-images"
       aws_ami_regions:
         description: "AWS regions to clean up AMIs from (comma-separated)"
         type: string
@@ -66,8 +58,17 @@ jobs:
           x64_image_name="postgres-ubuntu-2204-x64-${{ inputs.image_suffix }}"
           arm64_image_name="postgres-ubuntu-2204-arm64-${{ inputs.image_suffix }}"
 
+          # GCE image names cannot contain dots; build workflow sanitizes
+          # them the same way. Mirror that here so cleanup matches what
+          # was actually created.
+          suffix="${{ inputs.image_suffix }}"
+          x64_gce_image_name="postgres-ubuntu-2204-x64-${suffix//./-}"
+          arm64_gce_image_name="postgres-ubuntu-2204-arm64-${suffix//./-}"
+
           echo "x64_image_name=${x64_image_name}" >> $GITHUB_OUTPUT
           echo "arm64_image_name=${arm64_image_name}" >> $GITHUB_OUTPUT
+          echo "x64_gce_image_name=${x64_gce_image_name}" >> $GITHUB_OUTPUT
+          echo "arm64_gce_image_name=${arm64_gce_image_name}" >> $GITHUB_OUTPUT
 
           echo "### Target Images" >> $GITHUB_STEP_SUMMARY
           if [ "${{ inputs.architecture }}" = "x64" ] || [ "${{ inputs.architecture }}" = "both" ]; then
@@ -301,6 +302,7 @@ jobs:
 
       - name: Authenticate to GCP
         if: ${{ inputs.cleanup_gce }}
+        id: gcp_auth
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
@@ -312,8 +314,8 @@ jobs:
       - name: Cleanup GCE images
         if: ${{ inputs.cleanup_gce }}
         run: |
-          project="${{ inputs.gcp_project }}"
-          bucket="${{ inputs.gcs_bucket }}"
+          project="${{ steps.gcp_auth.outputs.project_id }}"
+          bucket="${{ secrets.GCS_BUCKET }}"
 
           echo "### GCE Cleanup" >> $GITHUB_STEP_SUMMARY
 
@@ -349,11 +351,11 @@ jobs:
           }
 
           if [ "${{ inputs.architecture }}" = "x64" ] || [ "${{ inputs.architecture }}" = "both" ]; then
-            cleanup_gce_image "${{ steps.set_image_names.outputs.x64_image_name }}" "x64"
+            cleanup_gce_image "${{ steps.set_image_names.outputs.x64_gce_image_name }}" "x64"
           fi
 
           if [ "${{ inputs.architecture }}" = "arm64" ] || [ "${{ inputs.architecture }}" = "both" ]; then
-            cleanup_gce_image "${{ steps.set_image_names.outputs.arm64_image_name }}" "arm64"
+            cleanup_gce_image "${{ steps.set_image_names.outputs.arm64_gce_image_name }}" "arm64"
           fi
 
       - name: Summary
