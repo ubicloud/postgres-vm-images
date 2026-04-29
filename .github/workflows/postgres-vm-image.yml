@@ -673,7 +673,7 @@ jobs:
           cat ${sha_filename} >> $GITHUB_STEP_SUMMARY
 
       - name: Install AWS CLI
-        if: ${{ !inputs.build_only }}
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
         run: |
           curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o "awscliv2.zip"
           unzip -q awscliv2.zip
@@ -681,7 +681,7 @@ jobs:
           aws --version
 
       - name: Configure AWS credentials (role)
-        if: ${{ !inputs.build_only && inputs.use_aws_role }}
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only && inputs.use_aws_role }}
         uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
@@ -689,7 +689,7 @@ jobs:
           aws-region: us-west-2
 
       - name: Configure AWS credentials (access keys)
-        if: ${{ !inputs.build_only && !inputs.use_aws_role }}
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only && !inputs.use_aws_role }}
         uses: aws-actions/configure-aws-credentials@v5
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -697,7 +697,7 @@ jobs:
           aws-region: us-west-2
 
       - name: Upload image to S3
-        if: ${{ !inputs.build_only }}
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
         id: s3_upload
         run: |
           image_filename=${{ steps.set_image_name.outputs.IMAGE_NAME }}.raw
@@ -713,7 +713,7 @@ jobs:
           echo "s3_bucket=${s3_bucket}" >> $GITHUB_OUTPUT
 
       - name: Import snapshot to AWS
-        if: ${{ !inputs.build_only }}
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
         id: import_snapshot
         run: |
           image_filename=${{ steps.s3_upload.outputs.image_filename }}
@@ -745,7 +745,7 @@ jobs:
           echo "import_task_id=${import_task_id}" >> $GITHUB_OUTPUT
 
       - name: Wait for snapshot import completion
-        if: ${{ !inputs.build_only }}
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
         id: wait_snapshot
         run: |
           import_task_id=${{ steps.import_snapshot.outputs.import_task_id }}
@@ -790,7 +790,7 @@ jobs:
             --tags "Key=Name,Value=${image_filename}" "Key=Source,Value=postgres-vm-images" "Key=Architecture,Value=arm64"
 
       - name: Register AMI from snapshot
-        if: ${{ !inputs.build_only }}
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
         id: register_ami
         run: |
           ami_name=${{ steps.set_image_name.outputs.IMAGE_NAME }}
@@ -819,7 +819,7 @@ jobs:
           echo "Region: us-west-2" >> $GITHUB_STEP_SUMMARY
 
       - name: Copy AMI to additional regions
-        if: ${{ inputs.aws_ami_regions != '' && !inputs.build_only }}
+        if: ${{ inputs.upload_aws_ami && inputs.aws_ami_regions != '' && !inputs.build_only }}
         id: copy_ami
         run: |
           ami_id=${{ steps.register_ami.outputs.ami_id }}
@@ -875,7 +875,7 @@ jobs:
           echo "all_ami_ids=${all_ami_ids}" >> $GITHUB_OUTPUT
 
       - name: Wait for AMI copies and share
-        if: ${{ !inputs.build_only }}
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
         run: |
           ami_id=${{ steps.register_ami.outputs.ami_id }}
           all_ami_ids="${{ steps.copy_ami.outputs.all_ami_ids }}"
@@ -952,7 +952,7 @@ jobs:
           done
 
       - name: Generate AMI IDs artifact
-        if: ${{ !inputs.build_only }}
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
         run: |
           all_ami_ids="${{ steps.copy_ami.outputs.all_ami_ids }}"
 
@@ -975,14 +975,14 @@ jobs:
           cat ami-ids-arm64.yaml
 
       - name: Upload AMI IDs artifact
-        if: ${{ !inputs.build_only }}
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
         uses: actions/upload-artifact@v4
         with:
           name: ami-ids-arm64
           path: ami-ids-arm64.yaml
 
       - name: Clean up S3
-        if: ${{ !inputs.build_only }}
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
         continue-on-error: true
         run: |
           echo "Cleaning up S3..."
