@@ -28,6 +28,7 @@ This approach is significantly faster than QEMU-based builds, especially on ARM6
 - **Builds WAL-G from source** (commit cf1ce0f5b69048e31d740b508a79d8294707e339)
 - Builds walg-daemon-client
 - **Builds pguint extension** for PG 16, 17, 18
+- **Builds walg_archive extension** for PG 16, 17, 18
 
 ### common/setup_monitoring.sh
 - Downloads and installs Prometheus v2.53.0
@@ -56,7 +57,7 @@ This approach is significantly faster than QEMU-based builds, especially on ARM6
 
 ### PostgreSQL
 - Versions: 16, 17, 18 (packages downloaded, not installed)
-- Extensions: pguint (built from source for each version)
+- Extensions: pguint, walg_archive (built from source for each version)
 
 ### WAL-G
 - Built from source for native architecture

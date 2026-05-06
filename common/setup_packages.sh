@@ -83,6 +83,27 @@ make PG_CONFIG=/usr/lib/postgresql/18/bin/pg_config install
 cd /tmp
 rm -rf pguint
 
+echo "=== [setup_packages.sh] Building and installing walg_archive extension ==="
+
+# Clone and build walg_archive for each PostgreSQL version
+echo "[setup_packages.sh] Cloning walg_archive repository..."
+mkdir -p /tmp/walg_archive
+cd /tmp/walg_archive
+git init
+git remote add origin https://github.com/wal-g/walg_archive.git
+git fetch origin --depth 1 ce0d160b8503f98c179646e38cd24b9351ec8c0a
+git reset --hard FETCH_HEAD
+
+for PG_VERSION in 16 17 18; do
+    echo "[setup_packages.sh] Building walg_archive for PostgreSQL ${PG_VERSION}..."
+    make USE_PGXS=1 PG_CONFIG=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config
+    make USE_PGXS=1 PG_CONFIG=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config install
+    make USE_PGXS=1 PG_CONFIG=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config clean
+done
+
+cd /tmp
+rm -rf walg_archive
+
 # =============================================
 # ParadeDB Extensions (x64/amd64 only)
 # Download only - installation done at VM runtime
