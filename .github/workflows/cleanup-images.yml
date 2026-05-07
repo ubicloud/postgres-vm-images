@@ -42,6 +42,10 @@ on:
         default: false
         type: boolean
 
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   cleanup:
     name: Cleanup images for ${{ inputs.image_suffix }}
@@ -305,7 +309,8 @@ jobs:
         id: gcp_auth
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
 
       - name: Set up Cloud SDK
         if: ${{ inputs.cleanup_gce }}

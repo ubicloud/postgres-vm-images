@@ -535,7 +535,8 @@ jobs:
         id: gcp_auth
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
 
       - name: Set up Cloud SDK
         if: ${{ inputs.upload_gce && !inputs.build_only }}
@@ -1025,7 +1026,8 @@ jobs:
         id: gcp_auth
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
 
       - name: Set up Cloud SDK
         if: ${{ inputs.upload_gce && !inputs.build_only }}
