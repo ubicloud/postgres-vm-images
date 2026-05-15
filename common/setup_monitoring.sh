@@ -57,10 +57,6 @@ mkdir -p /var/lib/node_exporter
 cp /tmp/common/assets/postgres_exporter.service /etc/systemd/system/postgres_exporter.service
 cp /tmp/common/assets/wal-g.service /etc/systemd/system/wal-g.service
 
-# Copy postgres_exporter queries
-mkdir -p /usr/local/share/postgresql
-cp /tmp/common/assets/postgres_exporter_queries.yaml /usr/local/share/postgresql/postgres_exporter_queries.yaml
-
 # Reload systemd to recognize new services
 echo "[setup_monitoring.sh] Reloading systemd daemon..."
 systemctl daemon-reload
