@@ -45,6 +45,19 @@ echo "create_main_cluster = 'off'" >> /etc/postgresql-common/createcluster.conf
 mkdir -p /etc/postgresql-common/createcluster.d
 echo "include_dir = '/etc/postgresql-common/createcluster.d'" >> /etc/postgresql-common/createcluster.conf
 
+echo "=== [setup_base.sh] Pinning TZ=UTC ==="
+# TZ=UTC parses as a POSIX zone, so glibc skips stat()/read() of /etc/localtime on every localtime() call.
+# Also makes initdb default timezone/log_timezone to UTC.
+# DefaultEnvironment covers all systemd services (postgres + monitoring),
+# /etc/environment covers login shells and control-plane initdb.
+# https://blog.packagecloud.io/set-environment-variable-save-thousands-of-system-calls
+mkdir -p /etc/systemd/system.conf.d
+cat <<'EOF' > /etc/systemd/system.conf.d/tz.conf
+[Manager]
+DefaultEnvironment=TZ=UTC
+EOF
+echo 'TZ=UTC' >> /etc/environment
+
 # Install dependency libraries required by PostgreSQL extensions
 # These are installed now so dpkg can install extensions at runtime without apt-get update
 echo "[setup_base.sh] Installing PostgreSQL extension dependencies..."
