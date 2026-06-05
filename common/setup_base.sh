@@ -96,6 +96,16 @@ popd > /dev/null
 echo "[setup_base.sh] Package cache contents:"
 ls -la "$PACKAGE_CACHE"/*
 
+echo "=== [setup_base.sh] Reserving inbound service ports (50001-50032) ==="
+
+cat > /etc/sysctl.d/91-pgbouncer-per-instance-reserved-ports.conf <<'EOF'
+# Reserve inbound pgbouncer ports from ephemeral allocation, so outbound connections can't grab one
+# Allocating 4x current used for future use
+# This sysctl is a single scalar: writing replaces the whole list, never appends.
+# Keep this file the sole owner; add future ports to the line below, not a new drop-in.
+net.ipv4.ip_local_reserved_ports = 50001-50032
+EOF
+
 echo "=== [setup_base.sh] Setting up users and groups ==="
 
 # Create users
