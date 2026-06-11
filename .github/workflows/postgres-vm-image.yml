@@ -1181,10 +1181,12 @@ jobs:
         run: |
           cd ubicloud
           timestamp=$(date +%Y%m%d)
-          migration_file="migrate/${timestamp}_update_pg_amis.rb"
+          migration_file="migrate/${timestamp}_update_postgres_images.rb"
 
           x64_amis="${{ steps.collect.outputs.x64_ami_ids }}"
           arm64_amis="${{ steps.collect.outputs.arm64_ami_ids }}"
+          x64_gce_image="${{ steps.collect.outputs.x64_gce_image_name }}"
+          arm64_gce_image="${{ steps.collect.outputs.arm64_gce_image_name }}"
 
           # Find old AMIs from previous migration files (keyed by region:arch)
           declare -A old_amis
@@ -1202,6 +1204,17 @@ jobs:
           done
 
           echo "Found ${#old_amis[@]} existing AMI entries"
+
+          # Find old GCE image names from previous migration files (last match wins)
+          old_x64_gce=""
+          old_arm64_gce=""
+          for migration in $(ls -1 migrate/*.rb 2>/dev/null | sort); do
+            m=$(grep -oE 'postgres-ubuntu-[0-9]+-x64-[0-9][0-9-]*[0-9]' "$migration" 2>/dev/null | tail -1 || true)
+            [ -n "$m" ] && old_x64_gce="$m"
+            m=$(grep -oE 'postgres-ubuntu-[0-9]+-arm64-[0-9][0-9-]*[0-9]' "$migration" 2>/dev/null | tail -1 || true)
+            [ -n "$m" ] && old_arm64_gce="$m"
+          done
+          echo "Old GCE images: x64=${old_x64_gce:-none} arm64=${old_arm64_gce:-none}"
 
           # Collect entries: [region, arch, new_ami, old_ami]
           entries=()
@@ -1226,30 +1239,54 @@ jobs:
             done
           fi
 
+          # Collect GCE entries: [arch, new_name, old_name]
+          gce_entries=()
+          if [ -n "$x64_gce_image" ]; then
+            gce_entries+=("    [\"x64\", \"${x64_gce_image}\", \"${old_x64_gce}\"]")
+          fi
+          if [ -n "$arm64_gce_image" ]; then
+            gce_entries+=("    [\"arm64\", \"${arm64_gce_image}\", \"${old_arm64_gce}\"]")
+          fi
+
           # Build the migration file
           cat > "${migration_file}" << 'MIGRATION_HEADER'
           # frozen_string_literal: true
 
           Sequel.migration do
-            ami_ids = [
           MIGRATION_HEADER
-
-          # Remove leading spaces from heredoc
           sed -i 's/^          //' "${migration_file}"
 
-          # Write entries with trailing commas (rubocop Style/TrailingCommaInArrayLiteral)
-          for entry in "${entries[@]}"; do
-            echo "${entry}," >> "${migration_file}"
-          done
+          if [ ${#entries[@]} -eq 0 ]; then
+            echo "  ami_ids = []" >> "${migration_file}"
+          else
+            echo "  ami_ids = [" >> "${migration_file}"
+            for entry in "${entries[@]}"; do
+              echo "${entry}," >> "${migration_file}"
+            done
+            echo "  ]" >> "${migration_file}"
+          fi
+
+          if [ ${#gce_entries[@]} -eq 0 ]; then
+            echo "  gce_images = []" >> "${migration_file}"
+          else
+            echo "  gce_images = [" >> "${migration_file}"
+            for entry in "${gce_entries[@]}"; do
+              echo "${entry}," >> "${migration_file}"
+            done
+            echo "  ]" >> "${migration_file}"
+          fi
 
           cat >> "${migration_file}" << 'MIGRATION_FOOTER'
-            ]
 
             up do
               ami_ids.each do |location_name, arch, new_ami, old_ami|
                 from(:pg_aws_ami)
                   .where(aws_location_name: location_name, arch:, aws_ami_id: old_ami)
                   .update(aws_ami_id: new_ami)
+              end
+
+              gce_images.each do |arch, new_name, _old_name|
+                from(:pg_gce_image).where(arch:).update(gce_image_name: new_name)
               end
             end
 
@@ -1259,64 +1296,17 @@ jobs:
                   .where(aws_location_name: location_name, arch:, aws_ami_id: new_ami)
                   .update(aws_ami_id: old_ami)
               end
+
+              gce_images.each do |arch, _new_name, old_name|
+                raise Sequel::Error, "irreversible: previous GCE image name unknown" if old_name.empty?
+                from(:pg_gce_image).where(arch:).update(gce_image_name: old_name)
+              end
             end
           end
           MIGRATION_FOOTER
-
-          # Remove leading spaces from heredoc
           sed -i 's/^          //' "${migration_file}"
 
           echo "Created migration file: ${migration_file}"
-          cat "${migration_file}"
-
-      - name: Create GCE migration file
-        if: ${{ steps.collect.outputs.x64_gce_image_name != '' || steps.collect.outputs.arm64_gce_image_name != '' }}
-        run: |
-          cd ubicloud
-          timestamp=$(date +%Y%m%d)
-          migration_file="migrate/${timestamp}_update_pg_gce_images.rb"
-
-          x64_gce_image="${{ steps.collect.outputs.x64_gce_image_name }}"
-          arm64_gce_image="${{ steps.collect.outputs.arm64_gce_image_name }}"
-          project="${{ steps.collect.outputs.gce_image_project }}"
-
-          cat > "${migration_file}" << MIGRATION
-          # frozen_string_literal: true
-
-          Sequel.migration do
-            up do
-          MIGRATION
-          sed -i 's/^          //' "${migration_file}"
-
-          if [ -n "$x64_gce_image" ]; then
-            cat >> "${migration_file}" << MIGRATION
-              from(:pg_gce_image)
-                .where(gcp_project_id: "${project}", arch: "x64")
-                .update(gce_image_name: "${x64_gce_image}")
-          MIGRATION
-            sed -i 's/^          //' "${migration_file}"
-          fi
-
-          if [ -n "$arm64_gce_image" ]; then
-            cat >> "${migration_file}" << MIGRATION
-              from(:pg_gce_image)
-                .where(gcp_project_id: "${project}", arch: "arm64")
-                .update(gce_image_name: "${arm64_gce_image}")
-          MIGRATION
-            sed -i 's/^          //' "${migration_file}"
-          fi
-
-          cat >> "${migration_file}" << MIGRATION
-            end
-
-            down do
-              raise Sequel::Error, "irreversible: previous GCE image names unknown"
-            end
-          end
-          MIGRATION
-          sed -i 's/^          //' "${migration_file}"
-
-          echo "Created GCE migration file: ${migration_file}"
           cat "${migration_file}"
 
       - name: Create Pull Request
@@ -1361,8 +1351,7 @@ jobs:
             --title "Update postgres images to ${{ inputs.image_suffix }}" \
             --body "## Summary
           - Updates boot image version and SHA256 hashes in \`prog/download_boot_image.rb\`
-          - Adds migration to update AWS AMI IDs in \`pg_aws_ami\` table
-          - Adds migration to update GCE image names in \`pg_gce_image\` table (if GCE images built)
+          - Adds a single migration updating AWS AMI IDs in \`pg_aws_ami\` and GCE image names in \`pg_gce_image\`
 
           ## Image Version
           \`${{ inputs.image_suffix }}\`
@@ -1372,7 +1361,6 @@ jobs:
           - arm64 SHA256: \`${{ steps.collect.outputs.arm64_sha256 }}\`
           - GCE x64: \`${{ steps.collect.outputs.x64_gce_image_name }}\`
           - GCE arm64: \`${{ steps.collect.outputs.arm64_gce_image_name }}\`
-          - GCE project: \`${{ steps.collect.outputs.gce_image_project }}\`
 
           🤖 Generated by [postgres-vm-images](https://github.com/ubicloud/postgres-vm-images) workflow"
 
