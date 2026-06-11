@@ -18,7 +18,7 @@ apt-get install -y golang-go cmake
 
 # Install Python and PostgreSQL development packages for all versions
 echo "[setup_packages.sh] Installing python3, pip, and postgresql-server-dev packages..."
-apt-get install -y python3 python3-pip postgresql-server-dev-16 postgresql-server-dev-17 postgresql-server-dev-18
+apt-get install -y python3 python3-pip unzip postgresql-server-dev-16 postgresql-server-dev-17 postgresql-server-dev-18
 
 # Create symlink for python if needed (may already exist)
 ln -sf /usr/bin/python3 /usr/bin/python 2>/dev/null || true
@@ -140,5 +140,19 @@ if [ "${UBUNTU_ARCH}" = "amd64" ]; then
 else
     echo "[setup_packages.sh] Skipping ParadeDB extensions (arm64 not supported)"
 fi
+
+# Timescale pg_textsearch (BM25 ranking). Prebuilt debs exist for
+# PG 17 and 18 on amd64 and arm64; PG 16 has no upstream build.
+PG_TEXTSEARCH_VERSION="1.3.0"
+PG_TEXTSEARCH_TMP="/tmp/pg_textsearch"
+mkdir -p ${PG_TEXTSEARCH_TMP}
+for PG_VERSION in 17 18; do
+    echo "[setup_packages.sh] Installing pg_textsearch for PostgreSQL ${PG_VERSION}..."
+    curl -fL -o ${PG_TEXTSEARCH_TMP}/pg${PG_VERSION}.zip \
+        "https://github.com/timescale/pg_textsearch/releases/download/v${PG_TEXTSEARCH_VERSION}/pg-textsearch-v${PG_TEXTSEARCH_VERSION}-pg${PG_VERSION}-${UBUNTU_ARCH}.zip"
+    unzip -o -d ${PG_TEXTSEARCH_TMP} ${PG_TEXTSEARCH_TMP}/pg${PG_VERSION}.zip
+    apt-get install -y ${PG_TEXTSEARCH_TMP}/pg-textsearch-postgresql-${PG_VERSION}_${PG_TEXTSEARCH_VERSION}-1_${UBUNTU_ARCH}.deb
+done
+rm -rf ${PG_TEXTSEARCH_TMP}
 
 echo "=== [setup_packages.sh] Complete ==="
