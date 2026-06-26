@@ -33,7 +33,7 @@ cd /tmp/wal-g
 export GOEXPERIMENT=jsonv2
 git init
 git remote add origin https://github.com/wal-g/wal-g.git
-git fetch origin --depth 1 f81943e64bdf97aa66f6c52fec55114703f97af7
+git fetch origin --depth 1 e4843b849ca05a27655794888341de2662035853
 git reset --hard FETCH_HEAD
 
 echo "[setup_packages.sh] Running make deps (downloading Go dependencies)..."
