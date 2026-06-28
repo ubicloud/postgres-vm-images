@@ -93,7 +93,7 @@ mkdir -p /tmp/walg_archive
 cd /tmp/walg_archive
 git init
 git remote add origin https://github.com/wal-g/walg_archive.git
-git fetch origin --depth 1 ce0d160b8503f98c179646e38cd24b9351ec8c0a
+git fetch origin --depth 1 ed5674da1a6bbd403ecda971134a67a824b70a2f
 git reset --hard FETCH_HEAD
 
 for PG_VERSION in 16 17 18; do
