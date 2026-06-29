@@ -27,7 +27,7 @@ sudo ./build.sh paradedb
 ### PostgreSQL Stack
 - **PostgreSQL**: Versions 16, 17, and 18 (packages cached, not installed)
 - **Extensions**: pg_cron, pgvector, postgis-3, pgaudit, pglogical, pgrouting, pgtap, hypopg, pg_repack, partman, h3, hll, mysql-fdw, tds-fdw, orafce, similarity, pguint
-- **WAL-G**: Built from source for backup/restore
+- **WAL-G**: wal-rus (Rust port of wal-g) built from source, installed as a drop-in `wal-g` for backup/restore
 - **pgbouncer**: Connection pooling
 
 ### Monitoring
@@ -60,7 +60,7 @@ postgres-vm-images/
 ├── build.sh                     # Main build script
 ├── common/                      # Shared setup scripts
 │   ├── setup_base.sh            # PostgreSQL repos, users, package caching
-│   ├── setup_packages.sh        # WAL-G and pguint compilation
+│   ├── setup_packages.sh        # wal-rus (drop-in wal-g) and pguint compilation
 │   ├── setup_monitoring.sh      # Prometheus stack installation
 │   ├── setup_cleanup.sh         # Cloud-init and system cleanup
 │   └── assets/                  # Service files and package lists
@@ -85,7 +85,7 @@ postgres-vm-images/
 3. Mounts image via loop device and chroot (native speed, no QEMU emulation)
 4. Runs setup scripts:
    - `setup_base.sh`: PostgreSQL repository, users/groups, package caching
-   - `setup_packages.sh`: Builds WAL-G and pguint from source
+   - `setup_packages.sh`: Builds wal-rus (drop-in wal-g) and pguint from source
    - `setup_monitoring.sh`: Installs Prometheus monitoring stack
    - `flavors/<flavor>/setup.sh`: Flavor-specific setup
    - `setup_cleanup.sh`: Cloud-init cleanup, service configuration
