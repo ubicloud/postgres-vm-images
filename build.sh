@@ -28,12 +28,14 @@ echo "=== Detected architecture: $HOST_ARCH (Ubuntu: $UBUNTU_ARCH, Image: $IMAGE
 echo "=== Building PostgreSQL image (${TARGET_SIZE_GB}GB) ==="
 
 # Install dependencies
-apt-get update
-[ "$RUN_APT_UPGRADE" = "true" ] && apt-get -y upgrade
-apt-get install -y qemu-utils kpartx parted
+# Lock::Timeout waits out the runner's unattended-upgrades (apt-daily timers
+# fire on a randomized schedule) instead of failing on a held dpkg lock.
+apt-get -o DPkg::Lock::Timeout=300 update
+[ "$RUN_APT_UPGRADE" = "true" ] && apt-get -o DPkg::Lock::Timeout=300 -y upgrade
+apt-get -o DPkg::Lock::Timeout=300 install -y qemu-utils kpartx parted
 
 # Install guestfs-tools for virt-resize (used only for initial image resizing)
-apt-get install -y guestfs-tools
+apt-get -o DPkg::Lock::Timeout=300 install -y guestfs-tools
 chmod 0644 /boot/vmlinuz*
 
 # Download Ubuntu cloud image for detected architecture
