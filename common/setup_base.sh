@@ -21,7 +21,7 @@ echo "=== [setup_base.sh] Configuring PostgreSQL repositories ==="
 
 # Add PostgreSQL repository
 echo "[setup_base.sh] Downloading PostgreSQL GPG key..."
-wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
 sh -c 'echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
 
 # Add golang PPA for WAL-G (--no-update to avoid apt-get update inside add-apt-repository)
