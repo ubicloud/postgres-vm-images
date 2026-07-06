@@ -37,7 +37,7 @@ apt-get install -y guestfs-tools
 chmod 0644 /boot/vmlinuz*
 
 # Download Ubuntu cloud image for detected architecture
-wget https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-${UBUNTU_ARCH}.img -O cloud.img
+curl -fL -o cloud.img https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-${UBUNTU_ARCH}.img
 
 # Resize image and expand partition using virt-resize
 # This is fast as it just copies/expands data without booting a VM

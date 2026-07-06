@@ -17,7 +17,7 @@ echo "[setup_monitoring.sh] Detected architecture: $ARCH (prometheus arch: $PROM
 
 # Install Prometheus
 echo "[setup_monitoring.sh] Downloading Prometheus v3.5.2..."
-wget https://github.com/prometheus/prometheus/releases/download/v3.5.2/prometheus-3.5.2.linux-${PROM_ARCH}.tar.gz -P /tmp
+curl -fL -o /tmp/prometheus-3.5.2.linux-${PROM_ARCH}.tar.gz https://github.com/prometheus/prometheus/releases/download/v3.5.2/prometheus-3.5.2.linux-${PROM_ARCH}.tar.gz
 tar -xzvf /tmp/prometheus-3.5.2.linux-${PROM_ARCH}.tar.gz -C /tmp
 cp /tmp/prometheus-3.5.2.linux-${PROM_ARCH}/prometheus /usr/bin/prometheus
 chown prometheus:prometheus /usr/bin/prometheus
@@ -25,7 +25,7 @@ chmod 100 /usr/bin/prometheus
 
 # Install node_exporter
 echo "[setup_monitoring.sh] Downloading node_exporter v1.11.1..."
-wget https://github.com/prometheus/node_exporter/releases/download/v1.11.1/node_exporter-1.11.1.linux-${PROM_ARCH}.tar.gz -P /tmp
+curl -fL -o /tmp/node_exporter-1.11.1.linux-${PROM_ARCH}.tar.gz https://github.com/prometheus/node_exporter/releases/download/v1.11.1/node_exporter-1.11.1.linux-${PROM_ARCH}.tar.gz
 tar -xzvf /tmp/node_exporter-1.11.1.linux-${PROM_ARCH}.tar.gz -C /tmp
 cp /tmp/node_exporter-1.11.1.linux-${PROM_ARCH}/node_exporter /usr/bin/node_exporter
 chown prometheus:prometheus /usr/bin/node_exporter
@@ -33,7 +33,7 @@ chmod 100 /usr/bin/node_exporter
 
 # Install postgres_exporter
 echo "[setup_monitoring.sh] Downloading postgres_exporter v0.19.1..."
-wget https://github.com/prometheus-community/postgres_exporter/releases/download/v0.19.1/postgres_exporter-0.19.1.linux-${PROM_ARCH}.tar.gz -P /tmp
+curl -fL -o /tmp/postgres_exporter-0.19.1.linux-${PROM_ARCH}.tar.gz https://github.com/prometheus-community/postgres_exporter/releases/download/v0.19.1/postgres_exporter-0.19.1.linux-${PROM_ARCH}.tar.gz
 tar -xzvf /tmp/postgres_exporter-0.19.1.linux-${PROM_ARCH}.tar.gz -C /tmp
 cp /tmp/postgres_exporter-0.19.1.linux-${PROM_ARCH}/postgres_exporter /usr/bin/postgres_exporter
 chown ubi_monitoring:ubi_monitoring /usr/bin/postgres_exporter
