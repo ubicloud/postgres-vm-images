@@ -58,6 +58,20 @@ DefaultEnvironment=TZ=UTC
 EOF
 echo 'TZ=UTC' >> /etc/environment
 
+echo "=== [setup_base.sh] Replacing rsyslog with persistent journald ==="
+
+# jammy ubuntu-server no longer depends on rsyslog, purge won't cascade
+apt-get purge -y rsyslog
+
+mkdir -p /etc/systemd/journald.conf.d
+cat <<'EOF' > /etc/systemd/journald.conf.d/50-persistent.conf
+[Journal]
+Storage=persistent
+SystemMaxUse=4G
+Compress=yes
+ForwardToSyslog=no
+EOF
+
 # Install dependency libraries required by PostgreSQL extensions
 # These are installed now so dpkg can install extensions at runtime without apt-get update
 echo "[setup_base.sh] Installing PostgreSQL extension dependencies..."
