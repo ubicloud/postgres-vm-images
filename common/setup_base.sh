@@ -24,10 +24,6 @@ echo "[setup_base.sh] Downloading PostgreSQL GPG key..."
 curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
 sh -c 'echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
 
-# Add golang PPA for WAL-G (--no-update to avoid apt-get update inside add-apt-repository)
-echo "[setup_base.sh] Adding golang PPA..."
-add-apt-repository -y --no-update ppa:longsleep/golang-backports
-
 # Update package lists
 echo "[setup_base.sh] Running apt-get update..."
 apt-get update
