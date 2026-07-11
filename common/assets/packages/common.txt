@@ -1,2 +1,5 @@
 pgbouncer
 pgbouncer-dbgsym
+postgresql-client-16
+postgresql-client-17
+postgresql-client-18

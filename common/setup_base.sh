@@ -72,12 +72,14 @@ Compress=yes
 ForwardToSyslog=no
 EOF
 
-# Install dependency libraries required by PostgreSQL extensions
-# These are installed now so dpkg can install extensions at runtime without apt-get update
+# Install dependency libraries required by PostgreSQL extensions and by the
+# pgcopydb migrator (libgc1). Installed now so runtime dpkg of the baked .debs
+# resolves offline, with no apt-get update / network.
 echo "[setup_base.sh] Installing PostgreSQL extension dependencies..."
 apt-get install -y \
     libc-ares2 \
     libevent-2.1-7 \
+    libgc1 \
     libh3-1 \
     libgdal30 \
     libgeos-c1v5 \
@@ -120,6 +122,21 @@ pushd "$PACKAGE_CACHE/common" > /dev/null
 xargs -a /usr/local/share/postgresql/packages/common.txt apt-get download
 popd > /dev/null
 
+# Download pgcopydb pinned to the 0.18 upstream minor for the managed-Postgres
+# migrator (SPEC 9.1). Lands in the common cache so install-postgresql-packages
+# stages it for every target major alongside the client packages. Pin the minor
+# and let the PGDG packaging revision float; fail the build if 0.18 is ever gone.
+PGCOPYDB_VERSION="0.18"
+echo "[setup_base.sh] Downloading pgcopydb (pinned to ${PGCOPYDB_VERSION})..."
+PGCOPYDB_VERSION_FULL=$(apt-cache madison pgcopydb | awk -v v="$PGCOPYDB_VERSION" '$3 ~ ("^" v "[-.]") {print $3; exit}')
+if [ -z "$PGCOPYDB_VERSION_FULL" ]; then
+    echo "[setup_base.sh] ERROR: pgcopydb ${PGCOPYDB_VERSION} not available in PGDG" >&2
+    exit 1
+fi
+pushd "$PACKAGE_CACHE/common" > /dev/null
+apt-get download "pgcopydb=${PGCOPYDB_VERSION_FULL}"
+popd > /dev/null
+
 # Download VectorChord extension packages from GitHub releases
 # Not available in PostgreSQL APT repo, so downloaded separately
 echo "[setup_base.sh] Downloading VectorChord extension packages..."
@@ -143,6 +160,40 @@ for version in 16 17 18; do
     curl -L -o "$PACKAGE_CACHE/$version/postgresql-${version}-vchord-bm25.deb" \
         "https://github.com/tensorchord/VectorChord-bm25/releases/download/${VCHORD_BM25_VERSION}/postgresql-${version}-vchord-bm25_${VCHORD_BM25_VERSION_FULL}_${UBUNTU_ARCH}.deb"
 done
+
+# Bake the managed-Postgres migrator capability descriptor + probe (SPEC 9.4).
+# Generated from the exact packages staged above so it can never drift from what
+# runtime dpkg installs. The control-plane runner probe invokes the probe
+# command over ssh; images predating the migrator lack it and therefore report
+# migration-ineligible instead of failing mid-run. sandbox_support and
+# network_enforcement_support advertise the baked substrate (systemd hardening +
+# nftables); the runner still verifies enforcement fail-closed at runtime.
+echo "[setup_base.sh] Baking migrator capability descriptor..."
+source /tmp/build_arch.env
+PGCLIENT16_VERSION_FULL=$(dpkg-deb -f "$PACKAGE_CACHE"/common/postgresql-client-16_*.deb Version)
+PGCLIENT17_VERSION_FULL=$(dpkg-deb -f "$PACKAGE_CACHE"/common/postgresql-client-17_*.deb Version)
+PGCLIENT18_VERSION_FULL=$(dpkg-deb -f "$PACKAGE_CACHE"/common/postgresql-client-18_*.deb Version)
+mkdir -p /usr/local/share/ubi-pg-migration
+cat > /usr/local/share/ubi-pg-migration/capabilities.json <<EOF
+{
+  "runner_protocol": 1,
+  "architecture": "${IMAGE_ARCH}",
+  "pgcopydb": {
+    "version": "${PGCOPYDB_VERSION_FULL}",
+    "path": "/usr/bin/pgcopydb"
+  },
+  "clients": {
+    "16": { "version": "${PGCLIENT16_VERSION_FULL}", "bin_dir": "/usr/lib/postgresql/16/bin" },
+    "17": { "version": "${PGCLIENT17_VERSION_FULL}", "bin_dir": "/usr/lib/postgresql/17/bin" },
+    "18": { "version": "${PGCLIENT18_VERSION_FULL}", "bin_dir": "/usr/lib/postgresql/18/bin" }
+  },
+  "sandbox_support": true,
+  "network_enforcement_support": true
+}
+EOF
+chmod 644 /usr/local/share/ubi-pg-migration/capabilities.json
+cp /tmp/common/assets/scripts/ubi-pg-migration-capabilities /usr/local/bin/ubi-pg-migration-capabilities
+chmod 755 /usr/local/bin/ubi-pg-migration-capabilities
 
 echo "[setup_base.sh] Package cache contents:"
 ls -la "$PACKAGE_CACHE"/*
