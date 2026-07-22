@@ -72,12 +72,14 @@ Compress=yes
 ForwardToSyslog=no
 EOF
 
-# Install dependency libraries required by PostgreSQL extensions
-# These are installed now so dpkg can install extensions at runtime without apt-get update
+# Install dependency libraries required by PostgreSQL extensions and by the
+# pgcopydb migrator (libgc1). Installed now so runtime dpkg of the baked .debs
+# resolves offline, with no apt-get update / network.
 echo "[setup_base.sh] Installing PostgreSQL extension dependencies..."
 apt-get install -y \
     libc-ares2 \
     libevent-2.1-7 \
+    libgc1 \
     libh3-1 \
     libgdal30 \
     libgeos-c1v5 \
@@ -120,6 +122,42 @@ pushd "$PACKAGE_CACHE/common" > /dev/null
 xargs -a /usr/local/share/postgresql/packages/common.txt apt-get download
 popd > /dev/null
 
+# apt-get download can exit 0 without staging a file, so assert the baked client
+# majors landed. 6fd02f6 baked these into the cache precisely so the migrator no
+# longer relies on the incidental server-dev build dep; a silent download loss
+# would revert to that implicit state, and the runtime psql check would still
+# pass off the build-dep binaries -- hiding the regression until a future image
+# slimming purges those deps.
+for major in 16 17 18; do
+    if ! ls "$PACKAGE_CACHE"/common/postgresql-client-${major}_*.deb > /dev/null 2>&1; then
+        echo "[setup_base.sh] ERROR: postgresql-client-${major} .deb missing from cache after download" >&2
+        exit 1
+    fi
+done
+
+# Download pgcopydb pinned to the 0.18 upstream minor for the managed-Postgres
+# migrator (SPEC 9.1). Lands in the common cache so install-postgresql-packages
+# stages it for every target major alongside the client packages. Pin the minor
+# and let the PGDG packaging revision float; fail the build if 0.18 is ever gone.
+PGCOPYDB_VERSION="0.18"
+echo "[setup_base.sh] Downloading pgcopydb (pinned to ${PGCOPYDB_VERSION})..."
+PGCOPYDB_VERSION_FULL=$(apt-cache madison pgcopydb | awk -v v="$PGCOPYDB_VERSION" '$3 ~ ("^" v "[-.]") {print $3; exit}')
+if [ -z "$PGCOPYDB_VERSION_FULL" ]; then
+    echo "[setup_base.sh] ERROR: pgcopydb ${PGCOPYDB_VERSION} not available in PGDG" >&2
+    exit 1
+fi
+pushd "$PACKAGE_CACHE/common" > /dev/null
+apt-get download "pgcopydb=${PGCOPYDB_VERSION_FULL}"
+popd > /dev/null
+
+# apt-get download can exit 0 without staging a file, so assert the .deb landed.
+# Otherwise a green build ships an image whose runtime install silently omits
+# pgcopydb, leaving every migration ineligible with no signal until exec time.
+if ! ls "$PACKAGE_CACHE"/common/pgcopydb_*.deb > /dev/null 2>&1; then
+    echo "[setup_base.sh] ERROR: pgcopydb .deb missing from cache after download" >&2
+    exit 1
+fi
+
 # Download VectorChord extension packages from GitHub releases
 # Not available in PostgreSQL APT repo, so downloaded separately
 echo "[setup_base.sh] Downloading VectorChord extension packages..."
@@ -143,6 +181,11 @@ for version in 16 17 18; do
     curl -L -o "$PACKAGE_CACHE/$version/postgresql-${version}-vchord-bm25.deb" \
         "https://github.com/tensorchord/VectorChord-bm25/releases/download/${VCHORD_BM25_VERSION}/postgresql-${version}-vchord-bm25_${VCHORD_BM25_VERSION_FULL}_${UBUNTU_ARCH}.deb"
 done
+
+# Capability reporting is owned by the rhizome probe (bin/migration-capabilities,
+# PostgresMigrationCapabilities), which runs pgcopydb/pg_restore --version live on
+# the VM. No image-side JSON descriptor is baked here: a second, statically-baked
+# mechanism would only drift from what runtime dpkg actually installs.
 
 echo "[setup_base.sh] Package cache contents:"
 ls -la "$PACKAGE_CACHE"/*
