@@ -43,4 +43,20 @@ echo "Installing PostgreSQL $VERSION packages..."
 # then we'll verify everything is correctly installed
 dpkg -i "$PACKAGE_CACHE/common"/*.deb "$PACKAGE_CACHE/$VERSION"/*.deb
 
+# Fail loudly if the migrator tooling did not land. dpkg -i exits 0 when the
+# cache simply lacks pgcopydb, so without this check a migrator-incapable VM
+# provisions green and only surfaces at exec time. The client majors are all
+# staged in the common cache, so verify each -- this mirrors what the rhizome
+# capability probe reports.
+for bin in \
+    /usr/bin/pgcopydb \
+    /usr/lib/postgresql/16/bin/psql \
+    /usr/lib/postgresql/17/bin/psql \
+    /usr/lib/postgresql/18/bin/psql; do
+    if [[ ! -x "$bin" ]]; then
+        echo "Error: required migrator tool not installed: $bin" >&2
+        exit 1
+    fi
+done
+
 echo "PostgreSQL $VERSION packages installed successfully."

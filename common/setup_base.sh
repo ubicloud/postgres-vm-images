@@ -122,6 +122,19 @@ pushd "$PACKAGE_CACHE/common" > /dev/null
 xargs -a /usr/local/share/postgresql/packages/common.txt apt-get download
 popd > /dev/null
 
+# apt-get download can exit 0 without staging a file, so assert the baked client
+# majors landed. 6fd02f6 baked these into the cache precisely so the migrator no
+# longer relies on the incidental server-dev build dep; a silent download loss
+# would revert to that implicit state, and the runtime psql check would still
+# pass off the build-dep binaries -- hiding the regression until a future image
+# slimming purges those deps.
+for major in 16 17 18; do
+    if ! ls "$PACKAGE_CACHE"/common/postgresql-client-${major}_*.deb > /dev/null 2>&1; then
+        echo "[setup_base.sh] ERROR: postgresql-client-${major} .deb missing from cache after download" >&2
+        exit 1
+    fi
+done
+
 # Download pgcopydb pinned to the 0.18 upstream minor for the managed-Postgres
 # migrator (SPEC 9.1). Lands in the common cache so install-postgresql-packages
 # stages it for every target major alongside the client packages. Pin the minor
@@ -136,6 +149,14 @@ fi
 pushd "$PACKAGE_CACHE/common" > /dev/null
 apt-get download "pgcopydb=${PGCOPYDB_VERSION_FULL}"
 popd > /dev/null
+
+# apt-get download can exit 0 without staging a file, so assert the .deb landed.
+# Otherwise a green build ships an image whose runtime install silently omits
+# pgcopydb, leaving every migration ineligible with no signal until exec time.
+if ! ls "$PACKAGE_CACHE"/common/pgcopydb_*.deb > /dev/null 2>&1; then
+    echo "[setup_base.sh] ERROR: pgcopydb .deb missing from cache after download" >&2
+    exit 1
+fi
 
 # Download VectorChord extension packages from GitHub releases
 # Not available in PostgreSQL APT repo, so downloaded separately
@@ -161,39 +182,10 @@ for version in 16 17 18; do
         "https://github.com/tensorchord/VectorChord-bm25/releases/download/${VCHORD_BM25_VERSION}/postgresql-${version}-vchord-bm25_${VCHORD_BM25_VERSION_FULL}_${UBUNTU_ARCH}.deb"
 done
 
-# Bake the managed-Postgres migrator capability descriptor + probe (SPEC 9.4).
-# Generated from the exact packages staged above so it can never drift from what
-# runtime dpkg installs. The control-plane runner probe invokes the probe
-# command over ssh; images predating the migrator lack it and therefore report
-# migration-ineligible instead of failing mid-run. sandbox_support and
-# network_enforcement_support advertise the baked substrate (systemd hardening +
-# nftables); the runner still verifies enforcement fail-closed at runtime.
-echo "[setup_base.sh] Baking migrator capability descriptor..."
-source /tmp/build_arch.env
-PGCLIENT16_VERSION_FULL=$(dpkg-deb -f "$PACKAGE_CACHE"/common/postgresql-client-16_*.deb Version)
-PGCLIENT17_VERSION_FULL=$(dpkg-deb -f "$PACKAGE_CACHE"/common/postgresql-client-17_*.deb Version)
-PGCLIENT18_VERSION_FULL=$(dpkg-deb -f "$PACKAGE_CACHE"/common/postgresql-client-18_*.deb Version)
-mkdir -p /usr/local/share/ubi-pg-migration
-cat > /usr/local/share/ubi-pg-migration/capabilities.json <<EOF
-{
-  "runner_protocol": 1,
-  "architecture": "${IMAGE_ARCH}",
-  "pgcopydb": {
-    "version": "${PGCOPYDB_VERSION_FULL}",
-    "path": "/usr/bin/pgcopydb"
-  },
-  "clients": {
-    "16": { "version": "${PGCLIENT16_VERSION_FULL}", "bin_dir": "/usr/lib/postgresql/16/bin" },
-    "17": { "version": "${PGCLIENT17_VERSION_FULL}", "bin_dir": "/usr/lib/postgresql/17/bin" },
-    "18": { "version": "${PGCLIENT18_VERSION_FULL}", "bin_dir": "/usr/lib/postgresql/18/bin" }
-  },
-  "sandbox_support": true,
-  "network_enforcement_support": true
-}
-EOF
-chmod 644 /usr/local/share/ubi-pg-migration/capabilities.json
-cp /tmp/common/assets/scripts/ubi-pg-migration-capabilities /usr/local/bin/ubi-pg-migration-capabilities
-chmod 755 /usr/local/bin/ubi-pg-migration-capabilities
+# Capability reporting is owned by the rhizome probe (bin/migration-capabilities,
+# PostgresMigrationCapabilities), which runs pgcopydb/pg_restore --version live on
+# the VM. No image-side JSON descriptor is baked here: a second, statically-baked
+# mechanism would only drift from what runtime dpkg actually installs.
 
 echo "[setup_base.sh] Package cache contents:"
 ls -la "$PACKAGE_CACHE"/*
