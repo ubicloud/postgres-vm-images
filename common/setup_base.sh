@@ -3,16 +3,15 @@ set -uexo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
-echo "=== [setup_base.sh] Updating OpenSSH ==="
-
-# Update OpenSSH to address security vulnerabilities
 apt-get update -qq
-apt-get -qq -y satisfy 'openssh-server (>= 1:8.9p1-3ubuntu0.10)'
 
 echo "=== [setup_base.sh] Updating kernel ==="
 
-# Update to kernel 6.8.0-90-generic (Ubuntu 22.04's latest HWE kernel)
-apt-get install -y linux-image-6.8.0-90-generic linux-headers-6.8.0-90-generic linux-tools-6.8.0-90-generic linux-modules-extra-6.8.0-90-generic
+# Jammy ships 5.15 virtual, 6.8 is final HWE for 22.04. Read ABI off meta
+# instead of installing it: linux-image-generic-hwe-22.04 depends on
+# linux-firmware, 1.1GB of hardware blobs a VM never loads.
+KERNEL_ABI=$(apt-cache depends linux-image-generic-hwe-22.04 | sed -n 's/.*Depends: linux-image-\([0-9].*-generic\)$/\1/p')
+apt-get install -y "linux-image-$KERNEL_ABI" "linux-headers-$KERNEL_ABI" "linux-tools-$KERNEL_ABI" "linux-modules-extra-$KERNEL_ABI"
 
 echo "=== [setup_base.sh] Installing ruby-bundler ==="
 apt-get install -y ruby-bundler
