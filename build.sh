@@ -183,7 +183,7 @@ chroot ${MOUNT_POINT} /bin/bash -c "
   apt-get clean
   rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/log/*
   rm -f /root/.bash_history /root/.lesshst
-  rm -rf /root/.cache /tmp/* /var/tmp/*
+  rm -rf /root/.cache /root/go /tmp/* /var/tmp/*
 
   # Clean cloud-init
   rm -rf /var/lib/cloud
