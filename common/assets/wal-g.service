@@ -1,6 +1,6 @@
 [Unit]
-Description=WAL-G Daemon
-Documentation=https://github.com/wal-g/wal-g
+Description=wal-rus daemon (wal-g compatible)
+Documentation=https://github.com/ClickHouse/wal-rus
 Wants=network-online.target
 After=network-online.target
 

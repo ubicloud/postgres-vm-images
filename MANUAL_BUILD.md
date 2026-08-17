@@ -24,7 +24,7 @@ postgres-vm-images/
 ├── build.sh                 # Main build script
 ├── common/
 │   ├── setup_base.sh        # PostgreSQL repos & base packages
-│   ├── setup_packages.sh    # WAL-G & pguint compilation
+│   ├── setup_packages.sh    # wal-rus (drop-in wal-g) & pguint compilation
 │   ├── setup_monitoring.sh  # Prometheus stack
 │   ├── setup_cleanup.sh     # Final cleanup
 │   └── assets/              # Package lists & service files
@@ -62,7 +62,7 @@ The build uses a **direct mount + chroot** approach for native-speed execution:
 4. **Chroot** into mounted filesystem
 5. **Execute** setup scripts at native CPU speed:
    - `setup_base.sh` - PostgreSQL APT repo, base packages
-   - `setup_packages.sh` - Build WAL-G and pguint from source
+   - `setup_packages.sh` - Build wal-rus (drop-in wal-g) and pguint from source
    - `setup_monitoring.sh` - Prometheus, node_exporter, postgres_exporter
    - Flavor-specific `setup.sh`
    - `setup_cleanup.sh` - Clean apt cache, logs
@@ -75,7 +75,7 @@ The build uses a **direct mount + chroot** approach for native-speed execution:
 | x86_64 | ~12-15 minutes |
 | ARM64 | ~18-22 minutes |
 
-WAL-G compilation is the longest step (~5-8 minutes).
+wal-rus compilation (cargo `--release`) is the longest step.
 
 ## Output
 

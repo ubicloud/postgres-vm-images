@@ -15,7 +15,6 @@ This approach is significantly faster than QEMU-based builds, especially on ARM6
 
 ### common/setup_base.sh
 - Adds PostgreSQL APT repository (apt.postgresql.org)
-- Adds golang PPA for WAL-G build
 - Installs postgresql-common
 - Configures createcluster.conf (data checksums, no auto cluster)
 - Downloads PostgreSQL packages for versions 16, 17, 18
@@ -23,10 +22,10 @@ This approach is significantly faster than QEMU-based builds, especially on ARM6
 - Creates cert_readers group
 
 ### common/setup_packages.sh
-- Installs build tools (golang-go, cmake)
+- Installs build tools (cmake, build-essential, Rust toolchain via rustup)
 - Installs Python and PostgreSQL dev packages
-- **Builds WAL-G from source** (commit cf1ce0f5b69048e31d740b508a79d8294707e339)
-- Builds walg-daemon-client
+- **Builds wal-rus from source** (drop-in wal-g; pinned commit), installing it
+  as both `/usr/bin/wal-g` and `/usr/bin/walg-daemon-client`
 - **Builds pguint extension** for PG 16, 17, 18
 - **Builds walg_archive extension** for PG 16, 17, 18
 
@@ -59,9 +58,10 @@ This approach is significantly faster than QEMU-based builds, especially on ARM6
 - Versions: 16, 17, 18 (packages downloaded, not installed)
 - Extensions: pguint, walg_archive (built from source for each version)
 
-### WAL-G
-- Built from source for native architecture
-- Includes walg-daemon-client
+### WAL-G (wal-rus)
+- wal-rus (Rust port of wal-g) built from source for native architecture
+- Drop-in: installed as `/usr/bin/wal-g` and `/usr/bin/walg-daemon-client`
+  (one binary, daemon-client dispatched via argv[0])
 
 ### Monitoring Stack
 | Component | Version |
