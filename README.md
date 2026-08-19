@@ -10,9 +10,6 @@ sudo ./build.sh standard
 
 # Build with custom disk size
 sudo ./build.sh standard 16
-
-# Build ParadeDB flavor
-sudo ./build.sh paradedb
 ```
 
 ## Build Flavors
@@ -20,7 +17,6 @@ sudo ./build.sh paradedb
 | Flavor | Description |
 |--------|-------------|
 | `standard` | PostgreSQL with common extensions, CloudWatch agent, ClamAV scanning |
-| `paradedb` | Standard + ParadeDB extensions (pg_analytics, pg_search) |
 
 ## What's Installed
 
@@ -70,11 +66,8 @@ postgres-vm-images/
 │       ├── postgres_exporter.service
 │       └── wal-g.service
 ├── flavors/                     # Flavor-specific configurations
-│   ├── standard/
-│   │   └── setup.sh             # CloudWatch agent, ClamAV
-│   └── paradedb/
-│       ├── setup.sh             # ParadeDB extensions
-│       └── config.sh            # Version configuration
+│   └── standard/
+│       └── setup.sh             # CloudWatch agent, ClamAV
 └── .github/workflows/           # CI/CD pipelines
 ```
 

@@ -106,41 +106,6 @@ done
 cd /tmp
 rm -rf walg_archive
 
-# =============================================
-# ParadeDB Extensions (x64/amd64 only)
-# Download only - installation done at VM runtime
-# =============================================
-if [ "${UBUNTU_ARCH}" = "amd64" ]; then
-    echo "=== [setup_packages.sh] Downloading ParadeDB extensions (x64 only) ==="
-
-    # ParadeDB extension versions
-    PG_ANALYTICS_VERSION="0.3.7"  # Only supports PG 16, 17 (archived project)
-    PG_SEARCH_VERSION="0.21.2"    # Supports PG 16, 17, 18
-
-    # Create persistent directory for ParadeDB packages
-    PARADEDB_PKG_DIR="/var/cache/paradedb"
-    mkdir -p ${PARADEDB_PKG_DIR}
-
-    # Download pg_analytics (only PG 16, 17 - no PG 18 support)
-    for PG_VERSION in 16 17; do
-        echo "[setup_packages.sh] Downloading pg_analytics for PostgreSQL ${PG_VERSION}..."
-        curl -L -o ${PARADEDB_PKG_DIR}/postgresql-${PG_VERSION}-pg-analytics.deb \
-            "https://github.com/paradedb/pg_analytics/releases/download/v${PG_ANALYTICS_VERSION}/postgresql-${PG_VERSION}-pg-analytics_${PG_ANALYTICS_VERSION}-1PARADEDB-jammy_amd64.deb"
-    done
-
-    # Download pg_search (PG 16, 17, 18)
-    for PG_VERSION in 16 17 18; do
-        echo "[setup_packages.sh] Downloading pg_search for PostgreSQL ${PG_VERSION}..."
-        curl -L -o ${PARADEDB_PKG_DIR}/postgresql-${PG_VERSION}-pg-search.deb \
-            "https://github.com/paradedb/paradedb/releases/download/v${PG_SEARCH_VERSION}/postgresql-${PG_VERSION}-pg-search_${PG_SEARCH_VERSION}-1PARADEDB-jammy_amd64.deb"
-    done
-
-    echo "[setup_packages.sh] ParadeDB packages downloaded to ${PARADEDB_PKG_DIR}:"
-    ls -la ${PARADEDB_PKG_DIR}/
-else
-    echo "[setup_packages.sh] Skipping ParadeDB extensions (arm64 not supported)"
-fi
-
 # Timescale pg_textsearch (BM25 ranking). Prebuilt debs exist for
 # PG 17 and 18 on amd64 and arm64; PG 16 has no upstream build.
 PG_TEXTSEARCH_VERSION="1.3.0"
