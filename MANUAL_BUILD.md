@@ -22,14 +22,12 @@ sudo apt-get install -y qemu-utils kpartx parted guestfs-tools
 ```
 postgres-vm-images/
 ├── build.sh                 # Main build script
-├── common/
-│   ├── setup_base.sh        # PostgreSQL repos & base packages
-│   ├── setup_packages.sh    # WAL-G & pguint compilation
-│   ├── setup_monitoring.sh  # Prometheus stack
-│   ├── setup_cleanup.sh     # Final cleanup
-│   └── assets/              # Package lists & service files
-└── flavors/
-    └── standard/            # Standard PostgreSQL image
+└── common/
+    ├── setup_base.sh        # PostgreSQL repos & base packages
+    ├── setup_packages.sh    # WAL-G & pguint compilation
+    ├── setup_monitoring.sh  # Prometheus stack
+    ├── setup_cleanup.sh     # Final cleanup
+    └── assets/              # Package lists & service files
 ```
 
 ## Running the Build
@@ -37,15 +35,14 @@ postgres-vm-images/
 ### Basic Usage
 
 ```bash
-# Build standard flavor with 8GB disk
-sudo ./build.sh standard 8
+# Build with 8GB disk
+sudo ./build.sh 8
 ```
 
 ### Parameters
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `flavor` | `standard` | Image flavor (standard) |
 | `size_gb` | `8` | Final image size in GB |
 
 ## Build Process
@@ -60,7 +57,6 @@ The build uses a **direct mount + chroot** approach for native-speed execution:
    - `setup_base.sh` - PostgreSQL APT repo, base packages
    - `setup_packages.sh` - Build WAL-G and pguint from source
    - `setup_monitoring.sh` - Prometheus, node_exporter, postgres_exporter
-   - Flavor-specific `setup.sh`
    - `setup_cleanup.sh` - Clean apt cache, logs
 6. **Cleanup** - Zero-fill, unmount, detach loop device
 
@@ -77,8 +73,8 @@ WAL-G compilation is the longest step (~5-8 minutes).
 
 After successful build:
 ```
-postgres-standard-x64-image.raw    # x86_64 build
-postgres-standard-arm64-image.raw  # ARM64 build
+postgres-x64-image.raw    # x86_64 build
+postgres-arm64-image.raw  # ARM64 build
 ```
 
 ## Troubleshooting
@@ -116,7 +112,7 @@ rm -f cloud.img cloud.raw resized.img
 qemu-system-x86_64 \
   -enable-kvm \
   -m 4096 \
-  -drive file=postgres-standard-x64-image.raw,format=raw \
+  -drive file=postgres-x64-image.raw,format=raw \
   -nographic
 ```
 

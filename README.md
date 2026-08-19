@@ -1,22 +1,16 @@
 # PostgreSQL VM Images
 
-Build scripts for creating PostgreSQL virtual machine images from Ubuntu cloud images. Supports multiple architectures (x64/arm64) and build flavors.
+Build scripts for creating PostgreSQL virtual machine images from Ubuntu cloud images. Supports multiple architectures (x64/arm64).
 
 ## Quick Start
 
 ```bash
-# Build standard image (8GB disk)
-sudo ./build.sh standard
+# Build image (8GB disk)
+sudo ./build.sh
 
 # Build with custom disk size
-sudo ./build.sh standard 16
+sudo ./build.sh 16
 ```
-
-## Build Flavors
-
-| Flavor | Description |
-|--------|-------------|
-| `standard` | PostgreSQL with common extensions, CloudWatch agent, ClamAV scanning |
 
 ## What's Installed
 
@@ -46,8 +40,8 @@ sudo ./build.sh standard 16
 ## Architecture Support
 
 The build script auto-detects the host architecture:
-- **x86_64** → builds `postgres-<flavor>-x64-image.raw`
-- **aarch64** → builds `postgres-<flavor>-arm64-image.raw`
+- **x86_64** → builds `postgres-x64-image.raw`
+- **aarch64** → builds `postgres-arm64-image.raw`
 
 ## Repository Structure
 
@@ -65,9 +59,6 @@ postgres-vm-images/
 │       ├── node_exporter.service
 │       ├── postgres_exporter.service
 │       └── wal-g.service
-├── flavors/                     # Flavor-specific configurations
-│   └── standard/
-│       └── setup.sh             # CloudWatch agent, ClamAV
 └── .github/workflows/           # CI/CD pipelines
 ```
 
@@ -80,7 +71,6 @@ postgres-vm-images/
    - `setup_base.sh`: PostgreSQL repository, users/groups, package caching
    - `setup_packages.sh`: Builds WAL-G and pguint from source
    - `setup_monitoring.sh`: Installs Prometheus monitoring stack
-   - `flavors/<flavor>/setup.sh`: Flavor-specific setup
    - `setup_cleanup.sh`: Cloud-init cleanup, service configuration
 5. Cleans up: removes SSH host keys, clears machine-id, zeros free space
 6. Outputs raw disk image
