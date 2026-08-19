@@ -1,11 +1,23 @@
 #!/bin/bash
 set -uexo pipefail
 
-# Usage: ./build.sh [size_gb]
-# Example: ./build.sh 12
+# Usage: ./build.sh [size_gb] [run_apt_upgrade] [ubuntu_release]
+# Example: ./build.sh 12 true 2604
 
 TARGET_SIZE_GB="${1:-12}"
 RUN_APT_UPGRADE="${2:-true}"
+UBUNTU_RELEASE="${3:-2604}"
+
+# Map release to codename. Adding a release here also requires a matching
+# entry in the per-release package lists in common/setup_base.sh.
+case $UBUNTU_RELEASE in
+  2604) UBUNTU_CODENAME="resolute" ;;
+  2204) UBUNTU_CODENAME="jammy" ;;
+  *)
+    echo "Error: Unsupported Ubuntu release: $UBUNTU_RELEASE"
+    exit 1
+    ;;
+esac
 
 # Detect architecture
 HOST_ARCH=$(uname -m)
@@ -39,7 +51,7 @@ apt-get -o DPkg::Lock::Timeout=300 install -y guestfs-tools
 chmod 0644 /boot/vmlinuz*
 
 # Download Ubuntu cloud image for detected architecture
-curl -fL -o cloud.img https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-${UBUNTU_ARCH}.img
+curl -fL -o cloud.img "https://cloud-images.ubuntu.com/${UBUNTU_CODENAME}/current/${UBUNTU_CODENAME}-server-cloudimg-${UBUNTU_ARCH}.img"
 
 # Resize image and expand partition using virt-resize
 # This is fast as it just copies/expands data without booting a VM
@@ -162,10 +174,12 @@ echo "=== Copying scripts to image ==="
 cp -r common ${MOUNT_POINT}/tmp/
 cp /tmp/amazon-guardduty-agent.deb ${MOUNT_POINT}/tmp/amazon-guardduty-agent.deb
 
-# Write architecture info
+# Write architecture and release info for the chroot setup scripts
 cat > ${MOUNT_POINT}/tmp/build_arch.env << EOF
 UBUNTU_ARCH=${UBUNTU_ARCH}
 IMAGE_ARCH=${IMAGE_ARCH}
+UBUNTU_RELEASE=${UBUNTU_RELEASE}
+UBUNTU_CODENAME=${UBUNTU_CODENAME}
 EOF
 
 # Make scripts executable
