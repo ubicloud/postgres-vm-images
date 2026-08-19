@@ -2,9 +2,9 @@
 set -uexo pipefail
 
 # Usage: ./build.sh [size_gb]
-# Example: ./build.sh 8
+# Example: ./build.sh 12
 
-TARGET_SIZE_GB="${1:-8}"
+TARGET_SIZE_GB="${1:-12}"
 RUN_APT_UPGRADE="${2:-true}"
 
 # Detect architecture

@@ -5,7 +5,7 @@ Build scripts for creating PostgreSQL virtual machine images from Ubuntu cloud i
 ## Quick Start
 
 ```bash
-# Build image (8GB disk)
+# Build image (12GB disk)
 sudo ./build.sh
 
 # Build with custom disk size
@@ -35,7 +35,7 @@ sudo ./build.sh 16
 - Linux host (Ubuntu/Debian recommended)
 - Root/sudo access
 - Required packages: `qemu-utils`, `kpartx`, `parted`, `guestfs-tools`
-- Minimum 8GB free disk space
+- Minimum 12GB free disk space
 
 ## Architecture Support
 

@@ -35,15 +35,15 @@ postgres-vm-images/
 ### Basic Usage
 
 ```bash
-# Build with 8GB disk
-sudo ./build.sh 8
+# Build with 12GB disk
+sudo ./build.sh 12
 ```
 
 ### Parameters
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `size_gb` | `8` | Final image size in GB |
+| `size_gb` | `12` | Final image size in GB |
 
 ## Build Process
 
