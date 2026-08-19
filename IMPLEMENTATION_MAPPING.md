@@ -14,6 +14,8 @@ This approach is significantly faster than QEMU-based builds, especially on ARM6
 ## Setup Scripts
 
 ### common/setup_base.sh
+- Pins GNU coreutils and classic sudo (Ubuntu 25.10+ default to uutils/sudo-rs)
+- Installs the latest HWE generic kernel for the release
 - Adds PostgreSQL APT repository (apt.postgresql.org)
 - Adds golang PPA for WAL-G build
 - Installs postgresql-common
@@ -21,25 +23,27 @@ This approach is significantly faster than QEMU-based builds, especially on ARM6
 - Downloads PostgreSQL packages for versions 16, 17, 18
 - Creates users: prometheus, ubi_monitoring
 - Creates cert_readers group
+- Sets up IMDS protection (nftables)
 
 ### common/setup_packages.sh
 - Installs build tools (golang-go, cmake)
 - Installs Python and PostgreSQL dev packages
-- **Builds WAL-G from source** (commit cf1ce0f5b69048e31d740b508a79d8294707e339)
+- **Builds WAL-G from source** (see pinned commit in the script)
 - Builds walg-daemon-client
 - **Builds pguint extension** for PG 16, 17, 18
 - **Builds walg_archive extension** for PG 16, 17, 18
+- Installs pg_textsearch for PG 17, 18
 
 ### common/setup_monitoring.sh
-- Downloads and installs Prometheus v2.53.0
-- Downloads and installs node_exporter v1.8.1
-- Downloads and installs postgres_exporter v0.15.0
+- Downloads and installs Prometheus, node_exporter, postgres_exporter
+  and otelcol-contrib (see pinned versions in the script)
+- Installs CloudWatch and GuardDuty agents
 - Installs systemd service files
+- Runs a ClamAV scan of system binaries
 
 ### common/setup_cleanup.sh
-- Cleans apt cache
-- Removes unnecessary packages
-- General cleanup
+- Cleans cloud-init state for first-boot re-initialization
+- Configures the cloud-init datasource list and grub serial console
 
 ## Final Cleanup (in build.sh)
 
@@ -63,9 +67,10 @@ This approach is significantly faster than QEMU-based builds, especially on ARM6
 ### Monitoring Stack
 | Component | Version |
 |-----------|---------|
-| Prometheus | 2.53.0 |
-| node_exporter | 1.8.1 |
-| postgres_exporter | 0.15.0 |
+| Prometheus | 3.5.2 |
+| node_exporter | 1.11.1 |
+| postgres_exporter | 0.19.1 |
+| otelcol-contrib | 0.150.1 |
 
 ### Users & Groups
 | User/Group | Purpose |
@@ -79,7 +84,7 @@ This approach is significantly faster than QEMU-based builds, especially on ARM6
 The workflow (`postgres-vm-image.yml`) supports:
 
 - **Architectures**: x64, ARM64
-- **Upload targets**: MinIO, Cloudflare R2, AWS AMI
+- **Upload targets**: MinIO, Cloudflare R2, AWS AMI, GCE
 - **AWS regions**: Configurable multi-region AMI copies
 
 ### Workflow Inputs
@@ -88,8 +93,11 @@ The workflow (`postgres-vm-image.yml`) supports:
 |-------|-------------|
 | `image_suffix` | Version suffix (e.g., 20260115.1.0) |
 | `image_resize_gb` | Final image size |
+| `ubuntu_release` | Ubuntu release to build on (2604/2204) |
 | `upload_image` | Upload to MinIO |
 | `upload_r2` | Upload to Cloudflare R2 |
 | `upload_aws_ami` | Create AWS AMI |
+| `upload_gce` | Create GCE image |
 | `aws_ami_regions` | Regions for AMI copies |
 | `build_arm64` | Build ARM64 in addition to x64 |
+| `create_ubicloud_pr` | Open an image-update PR against ubicloud/ubicloud |

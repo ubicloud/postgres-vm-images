@@ -3,7 +3,7 @@
 ## Prerequisites
 
 ### System Requirements
-- **OS**: Ubuntu 22.04 or newer
+- **OS**: Ubuntu 24.04 or newer
 - **RAM**: At least 4GB (8GB recommended)
 - **Disk Space**: At least 20GB free
 - **CPU**: x86_64 or ARM64 architecture
@@ -22,6 +22,7 @@ sudo apt-get install -y qemu-utils kpartx parted guestfs-tools
 ```
 postgres-vm-images/
 ├── build.sh                 # Main build script
+├── gce-postprocess.sh       # GCE-specific post-processing
 └── common/
     ├── setup_base.sh        # PostgreSQL repos & base packages
     ├── setup_packages.sh    # WAL-G & pguint compilation
@@ -35,8 +36,14 @@ postgres-vm-images/
 ### Basic Usage
 
 ```bash
-# Build with 12GB disk
-sudo ./build.sh 12
+# Build with defaults (12GB disk, apt upgrade, Ubuntu 26.04)
+sudo ./build.sh
+
+# Build with 10GB disk
+sudo ./build.sh 10
+
+# Build a jammy (22.04) image
+sudo ./build.sh 8 true 2204
 ```
 
 ### Parameters
@@ -44,20 +51,23 @@ sudo ./build.sh 12
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `size_gb` | `12` | Final image size in GB |
+| `run_apt_upgrade` | `true` | Run apt upgrade inside the image |
+| `ubuntu_release` | `2604` | Ubuntu release (2604, 2204) |
 
 ## Build Process
 
 The build uses a **direct mount + chroot** approach for native-speed execution:
 
-1. **Download** Ubuntu 22.04 cloud image
+1. **Download** the Ubuntu cloud image for the selected release
 2. **Resize** image using virt-resize (only libguestfs operation)
-3. **Mount** image via loop device + kpartx
+3. **Mount** image via loop device + kpartx (including the separate /boot
+   and /boot/efi partitions on 24.04+ images)
 4. **Chroot** into mounted filesystem
 5. **Execute** setup scripts at native CPU speed:
-   - `setup_base.sh` - PostgreSQL APT repo, base packages
-   - `setup_packages.sh` - Build WAL-G and pguint from source
-   - `setup_monitoring.sh` - Prometheus, node_exporter, postgres_exporter
-   - `setup_cleanup.sh` - Clean apt cache, logs
+   - `setup_base.sh` - GNU userland pin (25.10+), kernel, PostgreSQL APT repo, base packages
+   - `setup_packages.sh` - Build WAL-G, pguint, and walg_archive from source
+   - `setup_monitoring.sh` - Prometheus, node_exporter, postgres_exporter, AWS agents
+   - `setup_cleanup.sh` - Cloud-init and grub configuration
 6. **Cleanup** - Zero-fill, unmount, detach loop device
 
 ## Build Time
