@@ -139,8 +139,14 @@ mount --bind /sys ${MOUNT_POINT}/sys
 # Configure faster mirror for ARM builds
 if [ "${UBUNTU_ARCH}" = "arm64" ]; then
     echo "=== Configuring German mirror for ARM packages ==="
-    sed -i 's|ports.ubuntu.com|de.ports.ubuntu.com|g' ${MOUNT_POINT}/etc/apt/sources.list
-    cat ${MOUNT_POINT}/etc/apt/sources.list
+    # jammy uses the one-line /etc/apt/sources.list; noble and later ship
+    # deb822 /etc/apt/sources.list.d/ubuntu.sources instead.
+    for sources_file in ${MOUNT_POINT}/etc/apt/sources.list ${MOUNT_POINT}/etc/apt/sources.list.d/*.sources; do
+        if [ -f "$sources_file" ]; then
+            sed -i 's|ports.ubuntu.com|de.ports.ubuntu.com|g' "$sources_file"
+            cat "$sources_file"
+        fi
+    done
 fi
 
 # Download GuardDuty agent .deb (requires AWS credentials on the host)
