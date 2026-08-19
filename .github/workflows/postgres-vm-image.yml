@@ -15,7 +15,7 @@ on:
       image_resize_gb:
         description: "Target final image size in GB (exact size, not additional space)"
         required: true
-        default: 8
+        default: 12
         type: number
       build_only:
         description: "⚡ Build only (skip all uploads) - for testing"
