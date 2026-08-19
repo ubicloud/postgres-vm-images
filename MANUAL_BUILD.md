@@ -29,8 +29,7 @@ postgres-vm-images/
 │   ├── setup_cleanup.sh     # Final cleanup
 │   └── assets/              # Package lists & service files
 └── flavors/
-    ├── standard/            # Standard PostgreSQL image
-    └── paradedb/            # ParadeDB flavor
+    └── standard/            # Standard PostgreSQL image
 ```
 
 ## Running the Build
@@ -40,16 +39,13 @@ postgres-vm-images/
 ```bash
 # Build standard flavor with 8GB disk
 sudo ./build.sh standard 8
-
-# Build paradedb flavor with 10GB disk
-sudo ./build.sh paradedb 10
 ```
 
 ### Parameters
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `flavor` | `standard` | Image flavor (standard, paradedb) |
+| `flavor` | `standard` | Image flavor (standard) |
 | `size_gb` | `8` | Final image size in GB |
 
 ## Build Process

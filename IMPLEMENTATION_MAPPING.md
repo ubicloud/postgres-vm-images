@@ -42,7 +42,7 @@ This approach is significantly faster than QEMU-based builds, especially on ARM6
 - General cleanup
 
 ### flavors/{flavor}/setup.sh
-- Flavor-specific setup (e.g., ParadeDB extensions)
+- Flavor-specific setup
 
 ## Final Cleanup (in build.sh)
 
@@ -82,7 +82,7 @@ This approach is significantly faster than QEMU-based builds, especially on ARM6
 The workflow (`postgres-vm-image.yml`) supports:
 
 - **Architectures**: x64, ARM64
-- **Flavors**: standard, paradedb
+- **Flavors**: standard
 - **Upload targets**: MinIO, Cloudflare R2, AWS AMI
 - **AWS regions**: Configurable multi-region AMI copies
 
@@ -90,7 +90,7 @@ The workflow (`postgres-vm-image.yml`) supports:
 
 | Input | Description |
 |-------|-------------|
-| `flavor` | Image flavor (standard/paradedb) |
+| `flavor` | Image flavor (standard) |
 | `image_suffix` | Version suffix (e.g., 20260115.1.0) |
 | `image_resize_gb` | Final image size |
 | `upload_image` | Upload to MinIO |
