@@ -3,15 +3,52 @@ set -uexo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
+# Read architecture and release info from build.sh
+source /tmp/build_arch.env
+
+echo "=== [setup_base.sh] Target release: ${UBUNTU_CODENAME} (${UBUNTU_RELEASE}) ==="
+
 apt-get update -qq
+
+if [ "${UBUNTU_RELEASE}" -ge 2510 ]; then
+    echo "=== [setup_base.sh] Pinning GNU coreutils and sudo ==="
+    # 25.10+ default to uutils coreutils and sudo-rs. The control plane
+    # drives postgres almost entirely through sudo and coreutils
+    # (install/chown/truncate/dd against the data directory), and uutils
+    # is not 100% GNU-compatible. Pin the GNU implementations; both stay
+    # supported in the archive. /usr/bin/sudo is an update-alternatives
+    # group: sudo-rs at priority 50 (default), classic sudo.ws at 40.
+    # coreutils-from-gnu and coreutils-from-uutils both Conflict the virtual
+    # coreutils-from, and the APT 3.0 solver refuses to swap the installed
+    # uutils build on its own; mark it for removal (trailing -) explicitly.
+    # The uutils build is Essential (it is the coreutils provider), so the
+    # swap also needs --allow-remove-essential; the GNU provider replaces it
+    # in the same transaction, so the coreutils functionality is preserved.
+    apt-get install -y --allow-remove-essential coreutils-from-gnu coreutils-from-uutils- sudo
+    update-alternatives --set sudo /usr/bin/sudo.ws
+    [[ $(install --version) == *"GNU coreutils"* ]] || { echo "ERROR: GNU coreutils is not the active coreutils"; exit 1; }
+    [[ $(sudo --version) == "Sudo version 1."* ]] || { echo "ERROR: classic sudo is not the active sudo"; exit 1; }
+fi
 
 echo "=== [setup_base.sh] Updating kernel ==="
 
-# Jammy ships 5.15 virtual, 6.8 is final HWE for 22.04. Read ABI off meta
-# instead of installing it: linux-image-generic-hwe-22.04 depends on
-# linux-firmware, 1.1GB of hardware blobs a VM never loads.
-KERNEL_ABI=$(apt-cache depends linux-image-generic-hwe-22.04 | sed -n 's/.*Depends: linux-image-\([0-9].*-generic\)$/\1/p')
-apt-get install -y "linux-image-$KERNEL_ABI" "linux-headers-$KERNEL_ABI" "linux-tools-$KERNEL_ABI" "linux-modules-extra-$KERNEL_ABI"
+# The cloud image ships the GA virtual kernel; install the latest HWE
+# generic kernel for this release (on a freshly released LTS the HWE meta
+# still points at the GA kernel). Read the ABI off the meta instead of
+# installing it: linux-image-generic-hwe-* depends on linux-firmware,
+# 1.1GB of hardware blobs a VM never loads.
+UBUNTU_VERSION_ID="${UBUNTU_RELEASE:0:2}.${UBUNTU_RELEASE:2:2}"
+KERNEL_ABI=$(apt-cache depends "linux-image-generic-hwe-${UBUNTU_VERSION_ID}" | sed -n 's/.*Depends: linux-image-\([0-9].*-generic\)$/\1/p')
+
+# linux-image pulls in linux-modules. Older releases (jammy) split the
+# less-common drivers into a separate linux-modules-extra package; 26.04
+# folds them back into linux-modules, so no modules-extra package exists.
+# Install it only when the archive still ships it for this ABI.
+KERNEL_PKGS=("linux-image-$KERNEL_ABI" "linux-headers-$KERNEL_ABI" "linux-tools-$KERNEL_ABI")
+if apt-cache show "linux-modules-extra-$KERNEL_ABI" 2>/dev/null | grep -q "^Package:"; then
+    KERNEL_PKGS+=("linux-modules-extra-$KERNEL_ABI")
+fi
+apt-get install -y "${KERNEL_PKGS[@]}"
 
 echo "=== [setup_base.sh] Installing ruby-bundler ==="
 apt-get install -y ruby-bundler
@@ -59,7 +96,7 @@ echo 'TZ=UTC' >> /etc/environment
 
 echo "=== [setup_base.sh] Replacing rsyslog with persistent journald ==="
 
-# jammy ubuntu-server no longer depends on rsyslog, purge won't cascade
+# ubuntu-server no longer depends on rsyslog (since jammy), purge won't cascade
 apt-get purge -y rsyslog
 
 mkdir -p /etc/systemd/journald.conf.d
@@ -73,16 +110,26 @@ EOF
 
 # Install dependency libraries required by PostgreSQL extensions
 # These are installed now so dpkg can install extensions at runtime without apt-get update
+# Library package names carry sonames (and the noble-era t64 suffix), so
+# they differ per release.
 echo "[setup_base.sh] Installing PostgreSQL extension dependencies..."
+case "${UBUNTU_RELEASE}" in
+    2604)
+        EXTENSION_LIBS=(libevent-2.1-7t64 libgdal38 libgeos-c1t64 libproj25 libsfcgal2)
+        ;;
+    2204)
+        EXTENSION_LIBS=(libevent-2.1-7 libgdal30 libgeos-c1v5 libproj22 libsfcgal1)
+        ;;
+    *)
+        echo "ERROR: no extension library list for Ubuntu release ${UBUNTU_RELEASE}"
+        exit 1
+        ;;
+esac
 apt-get install -y \
+    "${EXTENSION_LIBS[@]}" \
     libc-ares2 \
-    libevent-2.1-7 \
     libh3-1 \
-    libgdal30 \
-    libgeos-c1v5 \
-    libproj22 \
     libprotobuf-c1 \
-    libsfcgal1 \
     libsybdb5 \
     liburing2 \
     default-libmysqlclient-dev \
@@ -176,6 +223,8 @@ echo "=== [setup_base.sh] Setting up IMDS protection ==="
 
 apt-get install -y nftables
 cp /tmp/common/assets/imds-protection.nftables.conf /etc/nftables.conf
+# The ruleset is validated in setup_monitoring.sh, after the otelcol-contrib
+# user it references exists (created by the otel collector package).
 cp /tmp/common/assets/imds-protection.service /etc/systemd/system/imds-protection.service
 systemctl enable imds-protection.service
 
