@@ -70,21 +70,30 @@ sleep 2  # Give kernel time to create device nodes
 echo "Available partitions:"
 ls -la /dev/mapper/"$(basename "${LOOP_DEV}")"* 2>/dev/null || true
 
-# Find the root partition - it's the largest ext4 partition
-# Ubuntu cloud images typically have: p1=BIOS boot (small), p14=EFI, p15=root (ext4)
-# Or sometimes: p1=root (ext4)
+# Find the root partition by filesystem label (cloudimg-rootfs).
+# Jammy images have: p1=root (ext4), p14=BIOS boot, p15=EFI (vfat).
+# Noble and later additionally split /boot into its own ext4 partition
+# (p16, label BOOT), so "first ext4 partition" is no longer a safe
+# heuristic for finding the root.
 LOOP_BASE=$(basename ${LOOP_DEV})
 ROOT_PART=""
+BOOT_PART=""
+EFI_PART=""
 
-# Try each partition and find one with ext4 filesystem
 for part in /dev/mapper/${LOOP_BASE}p*; do
     if [ -b "$part" ]; then
         FS_TYPE=$(blkid -o value -s TYPE "$part" 2>/dev/null || echo "")
-        echo "Partition $part: filesystem type = $FS_TYPE"
-        if [ "$FS_TYPE" = "ext4" ]; then
+        FS_LABEL=$(blkid -o value -s LABEL "$part" 2>/dev/null || echo "")
+        echo "Partition $part: type=$FS_TYPE label=$FS_LABEL"
+        case "$FS_LABEL" in
+            cloudimg-rootfs) ROOT_PART="$part" ;;
+            BOOT) BOOT_PART="$part" ;;
+            UEFI) EFI_PART="$part" ;;
+        esac
+        # Fallback for images without the expected labels: first ext4
+        # partition that is not a boot partition.
+        if [ -z "$ROOT_PART" ] && [ "$FS_TYPE" = "ext4" ] && [ "$FS_LABEL" != "BOOT" ]; then
             ROOT_PART="$part"
-            echo "Found root partition: $ROOT_PART"
-            break
         fi
     fi
 done
@@ -94,7 +103,7 @@ if [ -z "$ROOT_PART" ]; then
     exit 1
 fi
 
-echo "Root partition: ${ROOT_PART}"
+echo "Root partition: ${ROOT_PART} (boot: ${BOOT_PART:-none}, efi: ${EFI_PART:-none})"
 
 # Create mount point
 MOUNT_POINT="/mnt/image"
@@ -102,6 +111,17 @@ mkdir -p ${MOUNT_POINT}
 
 echo "=== Mounting root filesystem ==="
 mount ${ROOT_PART} ${MOUNT_POINT}
+
+# /boot (and /boot/efi) live on separate partitions on noble and later.
+# They must be mounted inside the chroot: otherwise kernel installs and
+# update-grub write to a shadowed /boot directory on the root filesystem
+# and the image keeps booting the original kernel and grub config.
+if [ -n "$BOOT_PART" ]; then
+    mount ${BOOT_PART} ${MOUNT_POINT}/boot
+fi
+if [ -n "$EFI_PART" ]; then
+    mount ${EFI_PART} ${MOUNT_POINT}/boot/efi
+fi
 
 # Set up DNS resolution BEFORE mounting /run (to avoid symlink issues)
 # resolv.conf may be a symlink to /run/systemd/resolve/stub-resolv.conf
@@ -204,6 +224,8 @@ umount ${MOUNT_POINT}/sys || true
 umount ${MOUNT_POINT}/proc || true
 umount ${MOUNT_POINT}/dev/pts || true
 umount ${MOUNT_POINT}/dev || true
+umount ${MOUNT_POINT}/boot/efi 2>/dev/null || true
+umount ${MOUNT_POINT}/boot 2>/dev/null || true
 umount ${MOUNT_POINT}
 
 echo "=== Cleaning up loop devices ==="
