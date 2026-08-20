@@ -1183,6 +1183,13 @@ jobs:
           timestamp=$(date +%Y%m%d)
           migration_file="migrate/${timestamp}_update_postgres_images.rb"
 
+          if [ -e "${migration_file}" ]; then
+            echo "ERROR: ${migration_file} already exists on ubicloud main; a same-day release was already merged."
+            echo "Databases that applied it would silently never run a regenerated file under the same name."
+            echo "Name and write this migration by hand."
+            exit 1
+          fi
+
           x64_amis="${{ steps.collect.outputs.x64_ami_ids }}"
           arm64_amis="${{ steps.collect.outputs.arm64_ami_ids }}"
           x64_gce_image="${{ steps.collect.outputs.x64_gce_image_name }}"
@@ -1229,6 +1236,10 @@ jobs:
               region=$(echo "$entry" | cut -d: -f1)
               new_ami=$(echo "$entry" | cut -d: -f2)
               old_ami="${old_amis["${region}:x64"]:-}"
+              if [ "$new_ami" = "$old_ami" ]; then
+                echo "ERROR: ${region}/x64 AMI ${new_ami} is already deployed; re-run of a merged release?"
+                exit 1
+              fi
               entries+=("    [\"${region}\", \"x64\", \"${new_ami}\", \"${old_ami}\"]")
             done
           fi
@@ -1239,16 +1250,32 @@ jobs:
               region=$(echo "$entry" | cut -d: -f1)
               new_ami=$(echo "$entry" | cut -d: -f2)
               old_ami="${old_amis["${region}:arm64"]:-}"
+              if [ "$new_ami" = "$old_ami" ]; then
+                echo "ERROR: ${region}/arm64 AMI ${new_ami} is already deployed; re-run of a merged release?"
+                exit 1
+              fi
               entries+=("    [\"${region}\", \"arm64\", \"${new_ami}\", \"${old_ami}\"]")
             done
           fi
 
           # Collect GCE entries: [arch, new_name, old_name]
+          check_gce_entry() {
+            if [ -z "$3" ]; then
+              echo "ERROR: no previous $1 GCE image name found in migrate/*.rb; write this migration by hand"
+              exit 1
+            fi
+            if [ "$2" = "$3" ]; then
+              echo "ERROR: $1 GCE image $2 is already deployed; re-run of a merged release?"
+              exit 1
+            fi
+          }
           gce_entries=()
           if [ -n "$x64_gce_image" ]; then
+            check_gce_entry x64 "$x64_gce_image" "$old_x64_gce"
             gce_entries+=("    [\"x64\", \"${x64_gce_image}\", \"${old_x64_gce}\"]")
           fi
           if [ -n "$arm64_gce_image" ]; then
+            check_gce_entry arm64 "$arm64_gce_image" "$old_arm64_gce"
             gce_entries+=("    [\"arm64\", \"${arm64_gce_image}\", \"${old_arm64_gce}\"]")
           fi
 
@@ -1283,26 +1310,33 @@ jobs:
 
             up do
               ami_ids.each do |location_name, arch, new_ami, old_ami|
+                next if old_ami.empty?
                 from(:pg_aws_ami)
                   .where(aws_location_name: location_name, arch:, aws_ami_id: old_ami)
                   .update(aws_ami_id: new_ami)
               end
 
-              gce_images.each do |arch, new_name, _old_name|
-                from(:pg_gce_image).where(arch:).update(gce_image_name: new_name)
+              gce_images.each do |arch, new_name, old_name|
+                raise Sequel::Error, "previous GCE image name unknown" if old_name.empty?
+                from(:pg_gce_image)
+                  .where(arch:, gce_image_name: old_name)
+                  .update(gce_image_name: new_name)
               end
             end
 
             down do
               ami_ids.each do |location_name, arch, new_ami, old_ami|
+                next if old_ami.empty?
                 from(:pg_aws_ami)
                   .where(aws_location_name: location_name, arch:, aws_ami_id: new_ami)
                   .update(aws_ami_id: old_ami)
               end
 
-              gce_images.each do |arch, _new_name, old_name|
+              gce_images.each do |arch, new_name, old_name|
                 raise Sequel::Error, "irreversible: previous GCE image name unknown" if old_name.empty?
-                from(:pg_gce_image).where(arch:).update(gce_image_name: old_name)
+                from(:pg_gce_image)
+                  .where(arch:, gce_image_name: new_name)
+                  .update(gce_image_name: old_name)
               end
             end
           end
