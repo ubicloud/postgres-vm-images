@@ -1205,15 +1205,19 @@ jobs:
 
           echo "Found ${#old_amis[@]} existing AMI entries"
 
-          # Find old GCE image names from previous migration files (last match wins)
-          old_x64_gce=""
-          old_arm64_gce=""
-          for migration in $(ls -1 migrate/*.rb 2>/dev/null | sort); do
-            m=$(grep -oE 'postgres-ubuntu-[0-9]+-x64-[0-9][0-9-]*[0-9]' "$migration" 2>/dev/null | tail -1 || true)
-            [ -n "$m" ] && old_x64_gce="$m"
-            m=$(grep -oE 'postgres-ubuntu-[0-9]+-arm64-[0-9][0-9-]*[0-9]' "$migration" 2>/dev/null | tail -1 || true)
-            [ -n "$m" ] && old_arm64_gce="$m"
-          done
+          # Find old GCE image names from previous migration files. Generated
+          # gce_images entries are ["arch", "new_name", "old_name"]; anchor on
+          # that tuple shape so unrelated mentions of an image name (a comment,
+          # a hand-written data fix) cannot match. The last file with a tuple
+          # holds the currently deployed name as its new_name.
+          old_gce_image() {
+            pat="\[\"${1}\",\s*\"postgres-ubuntu-[0-9]+-${1}-[0-9][0-9-]*[0-9]\""
+            file=$(grep -lE "$pat" migrate/*.rb | tail -1)
+            [ -z "$file" ] && return 0
+            grep -oE "$pat" "$file" | head -1 | grep -oE "postgres-ubuntu-[0-9]+-${1}-[0-9][0-9-]*[0-9]"
+          }
+          old_x64_gce=$(old_gce_image x64)
+          old_arm64_gce=$(old_gce_image arm64)
           echo "Old GCE images: x64=${old_x64_gce:-none} arm64=${old_arm64_gce:-none}"
 
           # Collect entries: [region, arch, new_ami, old_ami]
@@ -1254,7 +1258,6 @@ jobs:
 
           Sequel.migration do
           MIGRATION_HEADER
-          sed -i 's/^          //' "${migration_file}"
 
           if [ ${#entries[@]} -eq 0 ]; then
             echo "  ami_ids = []" >> "${migration_file}"
@@ -1304,7 +1307,6 @@ jobs:
             end
           end
           MIGRATION_FOOTER
-          sed -i 's/^          //' "${migration_file}"
 
           echo "Created migration file: ${migration_file}"
           cat "${migration_file}"
