@@ -67,10 +67,24 @@ permissions:
   contents: read
 
 jobs:
+  validate-inputs:
+    name: Validate inputs
+    runs-on: ubicloud-standard-2-ubuntu-2204
+    steps:
+      - name: Validate image_suffix
+        env:
+          IMAGE_SUFFIX: ${{ inputs.image_suffix }}
+        run: |
+          if ! [[ "$IMAGE_SUFFIX" =~ ^[0-9]{8}\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: image_suffix must look like YYYYMMDD.X.Y, got: ${IMAGE_SUFFIX}"
+            exit 1
+          fi
+
   # x64 build - always runs (unless test_pr_creation is enabled)
   build-x64:
     name: Build postgres-ubuntu-2204-x64-${{ inputs.image_suffix }}
     runs-on: ubicloud-standard-4-ubuntu-2204
+    needs: [validate-inputs]
     if: ${{ !inputs.test_pr_creation }}
     outputs:
       sha256: ${{ steps.compute_sha.outputs.sha256 }}
@@ -611,6 +625,7 @@ jobs:
   build-arm64:
     name: Build postgres-ubuntu-2204-arm64-${{ inputs.image_suffix }}
     runs-on: ubicloud-standard-4-arm-ubuntu-2204
+    needs: [validate-inputs]
     if: ${{ !inputs.test_pr_creation && (inputs.build_arm64 || (inputs.upload_aws_ami && !inputs.build_only)) }}
     outputs:
       sha256: ${{ steps.compute_sha.outputs.sha256 }}
@@ -1103,16 +1118,18 @@ jobs:
   create-ubicloud-pr:
     name: Create PR to ubicloud/ubicloud
     runs-on: ubicloud-standard-2-ubuntu-2204
-    needs: [build-x64, build-arm64]
-    if: ${{ always() && (inputs.test_pr_creation || (inputs.create_ubicloud_pr && !inputs.build_only && needs.build-x64.result == 'success')) }}
+    needs: [validate-inputs, build-x64, build-arm64]
+    if: ${{ always() && needs.validate-inputs.result == 'success' && (inputs.test_pr_creation || (inputs.create_ubicloud_pr && !inputs.build_only && needs.build-x64.result == 'success' && (needs.build-arm64.result == 'success' || needs.build-arm64.result == 'skipped'))) }}
     steps:
       - name: Collect build outputs
         id: collect
+        env:
+          IMAGE_SUFFIX: ${{ inputs.image_suffix }}
         run: |
           # Image name for download_boot_image.rb
           image_name="postgres-ubuntu-2204"
           echo "image_name=${image_name}" >> $GITHUB_OUTPUT
-          echo "version=${{ inputs.image_suffix }}" >> $GITHUB_OUTPUT
+          echo "version=${IMAGE_SUFFIX}" >> $GITHUB_OUTPUT
 
           # Check if running in test mode
           if [ "${{ inputs.test_pr_creation }}" = "true" ]; then
@@ -1121,6 +1138,9 @@ jobs:
             echo "arm64_sha256=dummy_arm64_sha256_for_testing_fedcba9876543210" >> $GITHUB_OUTPUT
             echo "x64_ami_ids=us-west-2:ami-test-x64-uswest2,us-east-1:ami-test-x64-useast1" >> $GITHUB_OUTPUT
             echo "arm64_ami_ids=us-west-2:ami-test-arm64-uswest2,us-east-1:ami-test-arm64-useast1" >> $GITHUB_OUTPUT
+            echo "x64_gce_image_name=postgres-ubuntu-2204-x64-${IMAGE_SUFFIX//./-}" >> $GITHUB_OUTPUT
+            echo "arm64_gce_image_name=postgres-ubuntu-2204-arm64-${IMAGE_SUFFIX//./-}" >> $GITHUB_OUTPUT
+            echo "gce_image_project=test-project" >> $GITHUB_OUTPUT
           else
             # x64 data
             echo "x64_sha256=${{ needs.build-x64.outputs.sha256 }}" >> $GITHUB_OUTPUT
@@ -1152,10 +1172,12 @@ jobs:
           git clone --depth 1 https://github.com/ubicloud/ubicloud.git ubicloud
 
       - name: Update download_boot_image.rb
+        env:
+          VERSION: ${{ steps.collect.outputs.version }}
         run: |
           cd ubicloud
           image_name="${{ steps.collect.outputs.image_name }}"
-          version="${{ steps.collect.outputs.version }}"
+          version="$VERSION"
           x64_sha="${{ steps.collect.outputs.x64_sha256 }}"
           arm64_sha="${{ steps.collect.outputs.arm64_sha256 }}"
 
@@ -1164,12 +1186,20 @@ jobs:
           if [ -n "$x64_sha" ]; then
             # Find the x64 section under this image and replace the version => sha line
             sed -i "/\"${image_name}\" => {/,/^    },/ { /\"x64\" => {/,/^      },/ s|\"[^\"]*\" => \"[^\"]*\",|\"${version}\" => \"${x64_sha}\",| ; }" prog/download_boot_image.rb
+            if ! grep -qF "\"${version}\" => \"${x64_sha}\"" prog/download_boot_image.rb; then
+              echo "ERROR: no x64 entry for ${image_name} in prog/download_boot_image.rb to update; add one by hand"
+              exit 1
+            fi
             echo "Updated x64 entry: ${image_name} -> ${version}"
           fi
 
           if [ -n "$arm64_sha" ]; then
             # Find the arm64 section under this image and replace the version => sha line
             sed -i "/\"${image_name}\" => {/,/^    },/ { /\"arm64\" => {/,/^      },/ s|\"[^\"]*\" => \"[^\"]*\",|\"${version}\" => \"${arm64_sha}\",| ; }" prog/download_boot_image.rb
+            if ! grep -qF "\"${version}\" => \"${arm64_sha}\"" prog/download_boot_image.rb; then
+              echo "ERROR: no arm64 entry for ${image_name} in prog/download_boot_image.rb to update; add one by hand"
+              exit 1
+            fi
             echo "Updated arm64 entry: ${image_name} -> ${version}"
           fi
 
@@ -1348,6 +1378,7 @@ jobs:
       - name: Create Pull Request
         env:
           GH_TOKEN: ${{ secrets.UBICLOUD_REPO_PAT }}
+          IMAGE_SUFFIX: ${{ inputs.image_suffix }}
         run: |
           cd ubicloud
 
@@ -1358,39 +1389,33 @@ jobs:
           # Configure git to use the PAT for authentication
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/ubicloud/ubicloud.git"
 
-          branch_name="update-postgres-images-${{ inputs.image_suffix }}"
+          branch_name="update-postgres-images-${IMAGE_SUFFIX}"
 
-          # Check if PR already exists for this branch
-          existing_pr=$(gh pr list --repo ubicloud/ubicloud --head "${branch_name}" --json number -q '.[0].number' 2>/dev/null || echo "")
+          # Force push so a re-run refreshes the branch and any open PR for
+          # it instead of keeping a stale previous run's content
+          git checkout -b "${branch_name}"
+          git add -A
+          git commit -m "Update postgres images to ${IMAGE_SUFFIX}"
+          git push --force -u origin "${branch_name}"
+
+          existing_pr=$(gh pr list --repo ubicloud/ubicloud --head "${branch_name}" --json number -q '.[0].number' || echo "")
           if [ -n "$existing_pr" ]; then
-            echo "PR #${existing_pr} already exists for branch ${branch_name}"
-            echo "### Existing PR" >> $GITHUB_STEP_SUMMARY
+            echo "Updated existing PR #${existing_pr} for branch ${branch_name}"
+            echo "### Existing PR updated" >> $GITHUB_STEP_SUMMARY
             gh pr view --repo ubicloud/ubicloud "${existing_pr}" --json url -q '.url' >> $GITHUB_STEP_SUMMARY
             exit 0
           fi
 
-          # Delete remote branch if it exists (from failed previous run)
-          git push origin --delete "${branch_name}" 2>/dev/null || true
-
-          # Create branch and commit
-          git checkout -b "${branch_name}"
-          git add -A
-          git commit -m "Update postgres images to ${{ inputs.image_suffix }}"
-
-          # Push branch
-          git push -u origin "${branch_name}"
-
-          # Create PR
           gh pr create \
             --repo ubicloud/ubicloud \
             --head "${branch_name}" \
-            --title "Update postgres images to ${{ inputs.image_suffix }}" \
+            --title "Update postgres images to ${IMAGE_SUFFIX}" \
             --body "## Summary
           - Updates boot image version and SHA256 hashes in \`prog/download_boot_image.rb\`
           - Adds a single migration updating AWS AMI IDs in \`pg_aws_ami\` and GCE image names in \`pg_gce_image\`
 
           ## Image Version
-          \`${{ inputs.image_suffix }}\`
+          \`${IMAGE_SUFFIX}\`
 
           ## Changes
           - x64 SHA256: \`${{ steps.collect.outputs.x64_sha256 }}\`
