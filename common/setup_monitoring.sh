@@ -62,20 +62,6 @@ echo "[setup_monitoring.sh] Reloading systemd daemon..."
 systemctl daemon-reload
 
 # =============================================
-# CloudWatch Agent (for AWS AMI compatibility)
-# =============================================
-echo "=== [setup_monitoring.sh] Installing CloudWatch Agent ==="
-
-case $ARCH in
-  x86_64)  CW_ARCH="amd64" ;;
-  aarch64) CW_ARCH="arm64" ;;
-esac
-
-curl -O https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/${CW_ARCH}/latest/amazon-cloudwatch-agent.deb
-dpkg -i amazon-cloudwatch-agent.deb
-rm -f amazon-cloudwatch-agent.deb
-
-# =============================================
 # Amazon GuardDuty Agent (for AWS Runtime Monitoring)
 # =============================================
 echo "=== [setup_monitoring.sh] Installing Amazon GuardDuty Agent ==="
