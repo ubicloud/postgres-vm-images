@@ -32,6 +32,18 @@ fi
 
 echo "=== [setup_base.sh] Updating kernel ==="
 
+# Ubuntu 26.04 (kernel 7.x) builds the initramfs with dracut, whose default
+# hostonly mode bakes the build host's transient loop/kpartx nodes
+# (/dev/mapper/loopNpM) into the image. Those nodes do not exist in a real
+# guest, so it drops to the dracut emergency shell unable to find its root.
+# Force a generic initramfs before the kernel install triggers the first
+# dracut run. Inert on releases that use initramfs-tools (e.g. jammy).
+mkdir -p /etc/dracut.conf.d
+cat > /etc/dracut.conf.d/00-generic.conf <<'EOF'
+hostonly="no"
+hostonly_cmdline="no"
+EOF
+
 # The cloud image ships the GA virtual kernel; install the latest HWE
 # generic kernel for this release (on a freshly released LTS the HWE meta
 # still points at the GA kernel). Read the ABI off the meta instead of
