@@ -32,6 +32,22 @@ GRUB_CMDLINE_LINUX_DEFAULT="console=tty1 console=ttyS0"
 GRUB_TERMINAL=console
 EOF
 
+# Rebuild a generic initramfs and hard-fail if a build-host loop device
+# leaked in. 00-generic.conf (setup_base.sh) already forces hostonly=no for
+# the kernel-install dracut run; regenerate here to clear any stale hostonly
+# state and gate the image so a poisoned initramfs can never ship again.
+if command -v dracut >/dev/null 2>&1; then
+    rm -f /var/lib/dracut/hostonly-files /etc/cmdline.d/20-root-dev.conf
+    dracut --force --no-hostonly --regenerate-all
+    for img in /boot/initrd.img-*; do
+        [ -e "$img" ] || continue
+        if lsinitrd "$img" 2>/dev/null | grep -Eq 'loop[0-9]+p[0-9]+|/dev/mapper/loop'; then
+            echo "ERROR: $img references a build-host loop device; refusing to ship"
+            exit 1
+        fi
+    done
+fi
+
 # Apply grub configuration
 update-grub
 
