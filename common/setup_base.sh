@@ -30,6 +30,18 @@ if [ "${UBUNTU_RELEASE}" -ge 2510 ]; then
     [[ $(sudo --version) == "Sudo version 1."* ]] || { echo "ERROR: classic sudo is not the active sudo"; exit 1; }
 fi
 
+echo "=== [setup_base.sh] Generating en_US.UTF-8 locale ==="
+
+# The resolute cloud image ships only C, C.utf8, and POSIX. A PostgreSQL data
+# directory created with an en_US.UTF-8 (libc) collation fails to start if that
+# locale is absent — an outage, not a corruption risk — so generate it and
+# assert the expected set is present before the image ships.
+apt-get install -y locales
+locale-gen en_US.UTF-8
+for loc in C C.utf8 POSIX en_US.utf8; do
+    locale -a | grep -qixF "$loc" || { echo "ERROR: expected locale '$loc' missing after locale-gen"; exit 1; }
+done
+
 echo "=== [setup_base.sh] Updating kernel ==="
 
 # Ubuntu 26.04 (kernel 7.x) builds the initramfs with dracut, whose default
