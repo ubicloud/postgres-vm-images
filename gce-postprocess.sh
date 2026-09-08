@@ -26,14 +26,25 @@ LOOP_DEV=$(losetup --find --show "${IMAGE_FILE}")
 kpartx -av "${LOOP_DEV}"
 sleep 2
 
+# Find partitions by filesystem label (see build.sh). Noble and later
+# split /boot (label BOOT) and /boot/efi (label UEFI) into their own
+# partitions; both must be mounted so grub-install/update-grub write to
+# the real boot partition instead of a shadowed directory on the root fs.
 LOOP_BASE=$(basename "${LOOP_DEV}")
 ROOT_PART=""
+BOOT_PART=""
+EFI_PART=""
 for part in /dev/mapper/${LOOP_BASE}p*; do
     if [ -b "$part" ]; then
         FS_TYPE=$(blkid -o value -s TYPE "$part" 2>/dev/null || echo "")
-        if [ "$FS_TYPE" = "ext4" ]; then
+        FS_LABEL=$(blkid -o value -s LABEL "$part" 2>/dev/null || echo "")
+        case "$FS_LABEL" in
+            cloudimg-rootfs) ROOT_PART="$part" ;;
+            BOOT) BOOT_PART="$part" ;;
+            UEFI) EFI_PART="$part" ;;
+        esac
+        if [ -z "$ROOT_PART" ] && [ "$FS_TYPE" = "ext4" ] && [ "$FS_LABEL" != "BOOT" ]; then
             ROOT_PART="$part"
-            break
         fi
     fi
 done
@@ -46,6 +57,13 @@ fi
 MOUNT_POINT="/mnt/image"
 mkdir -p "${MOUNT_POINT}"
 mount "${ROOT_PART}" "${MOUNT_POINT}"
+if [ -n "$BOOT_PART" ]; then
+    mount "${BOOT_PART}" "${MOUNT_POINT}/boot"
+fi
+if [ -n "$EFI_PART" ]; then
+    mkdir -p "${MOUNT_POINT}/boot/efi"
+    mount "${EFI_PART}" "${MOUNT_POINT}/boot/efi"
+fi
 
 # Set up DNS
 mkdir -p "${MOUNT_POINT}/run/systemd/resolve"
@@ -68,25 +86,7 @@ else
   echo "=== GCE: Updating GRUB for EFI boot (arm64) ==="
   # ARM64 uses UEFI boot - the EFI partition from the Ubuntu cloud image
   # is already correct. Just update grub config.
-  # Mount the EFI partition if present
-  EFI_PART=""
-  for part in /dev/mapper/${LOOP_BASE}p*; do
-    if [ -b "$part" ]; then
-      FS_TYPE=$(blkid -o value -s TYPE "$part" 2>/dev/null || echo "")
-      if [ "$FS_TYPE" = "vfat" ]; then
-        EFI_PART="$part"
-        break
-      fi
-    fi
-  done
-  if [ -n "$EFI_PART" ]; then
-    mkdir -p "${MOUNT_POINT}/boot/efi"
-    mount "$EFI_PART" "${MOUNT_POINT}/boot/efi"
-    chroot "${MOUNT_POINT}" /bin/bash -c "update-grub"
-    umount "${MOUNT_POINT}/boot/efi"
-  else
-    chroot "${MOUNT_POINT}" /bin/bash -c "update-grub"
-  fi
+  chroot "${MOUNT_POINT}" /bin/bash -c "update-grub"
 fi
 
 # Step 3: Install Google guest agent for metadata processing
@@ -114,6 +114,8 @@ umount "${MOUNT_POINT}/sys" || true
 umount "${MOUNT_POINT}/proc" || true
 umount "${MOUNT_POINT}/dev/pts" || true
 umount "${MOUNT_POINT}/dev" || true
+umount "${MOUNT_POINT}/boot/efi" 2>/dev/null || true
+umount "${MOUNT_POINT}/boot" 2>/dev/null || true
 umount "${MOUNT_POINT}"
 kpartx -dv "${LOOP_DEV}"
 losetup -d "${LOOP_DEV}"

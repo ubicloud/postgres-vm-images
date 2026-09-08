@@ -17,6 +17,14 @@ on:
         required: true
         default: 12
         type: number
+      ubuntu_release:
+        description: "Ubuntu release to build on"
+        required: true
+        default: "2604"
+        type: choice
+        options:
+          - "2604"
+          - "2204"
       build_only:
         description: "⚡ Build only (skip all uploads) - for testing"
         default: false
@@ -69,8 +77,8 @@ permissions:
 jobs:
   # x64 build - always runs (unless test_pr_creation is enabled)
   build-x64:
-    name: Build postgres-ubuntu-2204-x64-${{ inputs.image_suffix }}
-    runs-on: ubicloud-standard-4-ubuntu-2204
+    name: Build postgres-ubuntu-${{ inputs.ubuntu_release }}-x64-${{ inputs.image_suffix }}
+    runs-on: ubicloud-standard-4-ubuntu-2404
     if: ${{ !inputs.test_pr_creation }}
     outputs:
       sha256: ${{ steps.compute_sha.outputs.sha256 }}
@@ -104,7 +112,7 @@ jobs:
             export AWS_DEFAULT_REGION=us-west-2
           fi
           sudo --preserve-env=AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_SESSION_TOKEN,AWS_REGION,AWS_DEFAULT_REGION \
-            ./build.sh ${{ inputs.image_resize_gb }} ${{ inputs.run_apt_upgrade }}
+            ./build.sh ${{ inputs.image_resize_gb }} ${{ inputs.run_apt_upgrade }} ${{ inputs.ubuntu_release }}
 
       - name: Install MinIO client
         run: |
@@ -123,7 +131,7 @@ jobs:
       - name: Set image name output
         id: set_image_name
         run: |
-          base_image_name=postgres-ubuntu-2204-x64-${{ inputs.image_suffix }}
+          base_image_name=postgres-ubuntu-${{ inputs.ubuntu_release }}-x64-${{ inputs.image_suffix }}
           if [ -n "${{ inputs.image_prefix }}" ]; then
             image_name=${{ inputs.image_prefix }}-${base_image_name}
           else
@@ -514,7 +522,7 @@ jobs:
           # GCE image names allow only [a-z0-9-]; image_suffix may contain
           # dots (e.g. "20260428.1.0"), so swap them for hyphens.
           suffix="${{ inputs.image_suffix }}"
-          gce_image_name="postgres-ubuntu-2204-x64-${suffix//./-}"
+          gce_image_name="postgres-ubuntu-${{ inputs.ubuntu_release }}-x64-${suffix//./-}"
           echo "gce_image_name=${gce_image_name}" >> $GITHUB_OUTPUT
           echo "GCE Image name: ${gce_image_name}"
 
@@ -609,8 +617,8 @@ jobs:
 
   # arm64 build
   build-arm64:
-    name: Build postgres-ubuntu-2204-arm64-${{ inputs.image_suffix }}
-    runs-on: ubicloud-standard-4-arm-ubuntu-2204
+    name: Build postgres-ubuntu-${{ inputs.ubuntu_release }}-arm64-${{ inputs.image_suffix }}
+    runs-on: ubicloud-standard-4-arm-ubuntu-2404
     if: ${{ !inputs.test_pr_creation && (inputs.build_arm64 || (inputs.upload_aws_ami && !inputs.build_only)) }}
     outputs:
       sha256: ${{ steps.compute_sha.outputs.sha256 }}
@@ -644,12 +652,12 @@ jobs:
             export AWS_DEFAULT_REGION=us-west-2
           fi
           sudo --preserve-env=AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_SESSION_TOKEN,AWS_REGION,AWS_DEFAULT_REGION \
-            ./build.sh ${{ inputs.image_resize_gb }} ${{ inputs.run_apt_upgrade }}
+            ./build.sh ${{ inputs.image_resize_gb }} ${{ inputs.run_apt_upgrade }} ${{ inputs.ubuntu_release }}
 
       - name: Set image name output
         id: set_image_name
         run: |
-          base_image_name=postgres-ubuntu-2204-arm64-${{ inputs.image_suffix }}
+          base_image_name=postgres-ubuntu-${{ inputs.ubuntu_release }}-arm64-${{ inputs.image_suffix }}
           if [ -n "${{ inputs.image_prefix }}" ]; then
             image_name=${{ inputs.image_prefix }}-${base_image_name}
           else
@@ -1005,7 +1013,7 @@ jobs:
           # GCE image names allow only [a-z0-9-]; image_suffix may contain
           # dots (e.g. "20260428.1.0"), so swap them for hyphens.
           suffix="${{ inputs.image_suffix }}"
-          gce_image_name="postgres-ubuntu-2204-arm64-${suffix//./-}"
+          gce_image_name="postgres-ubuntu-${{ inputs.ubuntu_release }}-arm64-${suffix//./-}"
           echo "gce_image_name=${gce_image_name}" >> $GITHUB_OUTPUT
           echo "GCE Image name: ${gce_image_name}"
 
@@ -1102,15 +1110,19 @@ jobs:
   # Create PR to ubicloud/ubicloud with updated image versions
   create-ubicloud-pr:
     name: Create PR to ubicloud/ubicloud
-    runs-on: ubicloud-standard-2-ubuntu-2204
+    runs-on: ubicloud-standard-2-ubuntu-2404
     needs: [build-x64, build-arm64]
     if: ${{ always() && (inputs.test_pr_creation || (inputs.create_ubicloud_pr && !inputs.build_only && needs.build-x64.result == 'success')) }}
     steps:
       - name: Collect build outputs
         id: collect
         run: |
-          # Image name for download_boot_image.rb
-          image_name="postgres-ubuntu-2204"
+          # Image name for download_boot_image.rb.
+          # NOTE: the sed in this job replaces an existing version line, so
+          # the "postgres-ubuntu-<release>" block must already exist in
+          # ubicloud's prog/download_boot_image.rb BOOT_IMAGE_SHA256 before
+          # this job can update it.
+          image_name="postgres-ubuntu-${{ inputs.ubuntu_release }}"
           echo "image_name=${image_name}" >> $GITHUB_OUTPUT
           echo "version=${{ inputs.image_suffix }}" >> $GITHUB_OUTPUT
 

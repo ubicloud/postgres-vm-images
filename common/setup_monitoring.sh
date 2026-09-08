@@ -83,6 +83,12 @@ echo "=== [setup_monitoring.sh] Installing Amazon GuardDuty Agent ==="
 dpkg -i /tmp/amazon-guardduty-agent.deb
 rm -f /tmp/amazon-guardduty-agent.deb
 
+# Validate the IMDS ruleset (staged at /etc/nftables.conf in setup_base.sh)
+# now that the otelcol-contrib user it references exists. nft -c resolves
+# skuid names to uids, so this must run after the otel collector install.
+echo "=== [setup_monitoring.sh] Validating IMDS nftables ruleset ==="
+nft -c -f /etc/nftables.conf
+
 # =============================================
 # ClamAV Security Scan
 # =============================================
