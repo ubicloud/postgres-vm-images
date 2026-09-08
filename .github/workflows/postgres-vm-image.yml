@@ -67,10 +67,24 @@ permissions:
   contents: read
 
 jobs:
+  validate-inputs:
+    name: Validate inputs
+    runs-on: ubicloud-standard-2-ubuntu-2204
+    steps:
+      - name: Validate image_suffix
+        env:
+          IMAGE_SUFFIX: ${{ inputs.image_suffix }}
+        run: |
+          if ! [[ "$IMAGE_SUFFIX" =~ ^[0-9]{8}\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: image_suffix must look like YYYYMMDD.X.Y, got: ${IMAGE_SUFFIX}"
+            exit 1
+          fi
+
   # x64 build - always runs (unless test_pr_creation is enabled)
   build-x64:
     name: Build postgres-ubuntu-2204-x64-${{ inputs.image_suffix }}
     runs-on: ubicloud-standard-4-ubuntu-2204
+    needs: [validate-inputs]
     if: ${{ !inputs.test_pr_creation }}
     outputs:
       sha256: ${{ steps.compute_sha.outputs.sha256 }}
@@ -611,6 +625,7 @@ jobs:
   build-arm64:
     name: Build postgres-ubuntu-2204-arm64-${{ inputs.image_suffix }}
     runs-on: ubicloud-standard-4-arm-ubuntu-2204
+    needs: [validate-inputs]
     if: ${{ !inputs.test_pr_creation && (inputs.build_arm64 || (inputs.upload_aws_ami && !inputs.build_only)) }}
     outputs:
       sha256: ${{ steps.compute_sha.outputs.sha256 }}
@@ -1103,16 +1118,18 @@ jobs:
   create-ubicloud-pr:
     name: Create PR to ubicloud/ubicloud
     runs-on: ubicloud-standard-2-ubuntu-2204
-    needs: [build-x64, build-arm64]
-    if: ${{ always() && (inputs.test_pr_creation || (inputs.create_ubicloud_pr && !inputs.build_only && needs.build-x64.result == 'success')) }}
+    needs: [validate-inputs, build-x64, build-arm64]
+    if: ${{ always() && needs.validate-inputs.result == 'success' && (inputs.test_pr_creation || (inputs.create_ubicloud_pr && !inputs.build_only && needs.build-x64.result == 'success' && (needs.build-arm64.result == 'success' || needs.build-arm64.result == 'skipped'))) }}
     steps:
       - name: Collect build outputs
         id: collect
+        env:
+          IMAGE_SUFFIX: ${{ inputs.image_suffix }}
         run: |
           # Image name for download_boot_image.rb
           image_name="postgres-ubuntu-2204"
           echo "image_name=${image_name}" >> $GITHUB_OUTPUT
-          echo "version=${{ inputs.image_suffix }}" >> $GITHUB_OUTPUT
+          echo "version=${IMAGE_SUFFIX}" >> $GITHUB_OUTPUT
 
           # Check if running in test mode
           if [ "${{ inputs.test_pr_creation }}" = "true" ]; then
@@ -1121,6 +1138,9 @@ jobs:
             echo "arm64_sha256=dummy_arm64_sha256_for_testing_fedcba9876543210" >> $GITHUB_OUTPUT
             echo "x64_ami_ids=us-west-2:ami-test-x64-uswest2,us-east-1:ami-test-x64-useast1" >> $GITHUB_OUTPUT
             echo "arm64_ami_ids=us-west-2:ami-test-arm64-uswest2,us-east-1:ami-test-arm64-useast1" >> $GITHUB_OUTPUT
+            echo "x64_gce_image_name=postgres-ubuntu-2204-x64-${IMAGE_SUFFIX//./-}" >> $GITHUB_OUTPUT
+            echo "arm64_gce_image_name=postgres-ubuntu-2204-arm64-${IMAGE_SUFFIX//./-}" >> $GITHUB_OUTPUT
+            echo "gce_image_project=test-project" >> $GITHUB_OUTPUT
           else
             # x64 data
             echo "x64_sha256=${{ needs.build-x64.outputs.sha256 }}" >> $GITHUB_OUTPUT
@@ -1152,10 +1172,12 @@ jobs:
           git clone --depth 1 https://github.com/ubicloud/ubicloud.git ubicloud
 
       - name: Update download_boot_image.rb
+        env:
+          VERSION: ${{ steps.collect.outputs.version }}
         run: |
           cd ubicloud
           image_name="${{ steps.collect.outputs.image_name }}"
-          version="${{ steps.collect.outputs.version }}"
+          version="$VERSION"
           x64_sha="${{ steps.collect.outputs.x64_sha256 }}"
           arm64_sha="${{ steps.collect.outputs.arm64_sha256 }}"
 
@@ -1164,12 +1186,20 @@ jobs:
           if [ -n "$x64_sha" ]; then
             # Find the x64 section under this image and replace the version => sha line
             sed -i "/\"${image_name}\" => {/,/^    },/ { /\"x64\" => {/,/^      },/ s|\"[^\"]*\" => \"[^\"]*\",|\"${version}\" => \"${x64_sha}\",| ; }" prog/download_boot_image.rb
+            if ! grep -qF "\"${version}\" => \"${x64_sha}\"" prog/download_boot_image.rb; then
+              echo "ERROR: no x64 entry for ${image_name} in prog/download_boot_image.rb to update; add one by hand"
+              exit 1
+            fi
             echo "Updated x64 entry: ${image_name} -> ${version}"
           fi
 
           if [ -n "$arm64_sha" ]; then
             # Find the arm64 section under this image and replace the version => sha line
             sed -i "/\"${image_name}\" => {/,/^    },/ { /\"arm64\" => {/,/^      },/ s|\"[^\"]*\" => \"[^\"]*\",|\"${version}\" => \"${arm64_sha}\",| ; }" prog/download_boot_image.rb
+            if ! grep -qF "\"${version}\" => \"${arm64_sha}\"" prog/download_boot_image.rb; then
+              echo "ERROR: no arm64 entry for ${image_name} in prog/download_boot_image.rb to update; add one by hand"
+              exit 1
+            fi
             echo "Updated arm64 entry: ${image_name} -> ${version}"
           fi
 
@@ -1182,6 +1212,13 @@ jobs:
           cd ubicloud
           timestamp=$(date +%Y%m%d)
           migration_file="migrate/${timestamp}_update_postgres_images.rb"
+
+          if [ -e "${migration_file}" ]; then
+            echo "ERROR: ${migration_file} already exists on ubicloud main; a same-day release was already merged."
+            echo "Databases that applied it would silently never run a regenerated file under the same name."
+            echo "Name and write this migration by hand."
+            exit 1
+          fi
 
           x64_amis="${{ steps.collect.outputs.x64_ami_ids }}"
           arm64_amis="${{ steps.collect.outputs.arm64_ami_ids }}"
@@ -1205,15 +1242,19 @@ jobs:
 
           echo "Found ${#old_amis[@]} existing AMI entries"
 
-          # Find old GCE image names from previous migration files (last match wins)
-          old_x64_gce=""
-          old_arm64_gce=""
-          for migration in $(ls -1 migrate/*.rb 2>/dev/null | sort); do
-            m=$(grep -oE 'postgres-ubuntu-[0-9]+-x64-[0-9][0-9-]*[0-9]' "$migration" 2>/dev/null | tail -1 || true)
-            [ -n "$m" ] && old_x64_gce="$m"
-            m=$(grep -oE 'postgres-ubuntu-[0-9]+-arm64-[0-9][0-9-]*[0-9]' "$migration" 2>/dev/null | tail -1 || true)
-            [ -n "$m" ] && old_arm64_gce="$m"
-          done
+          # Find old GCE image names from previous migration files. Generated
+          # gce_images entries are ["arch", "new_name", "old_name"]; anchor on
+          # that tuple shape so unrelated mentions of an image name (a comment,
+          # a hand-written data fix) cannot match. The last file with a tuple
+          # holds the currently deployed name as its new_name.
+          old_gce_image() {
+            pat="\[\"${1}\",\s*\"postgres-ubuntu-[0-9]+-${1}-[0-9][0-9-]*[0-9]\""
+            file=$(grep -lE "$pat" migrate/*.rb | tail -1)
+            [ -z "$file" ] && return 0
+            grep -oE "$pat" "$file" | head -1 | grep -oE "postgres-ubuntu-[0-9]+-${1}-[0-9][0-9-]*[0-9]"
+          }
+          old_x64_gce=$(old_gce_image x64)
+          old_arm64_gce=$(old_gce_image arm64)
           echo "Old GCE images: x64=${old_x64_gce:-none} arm64=${old_arm64_gce:-none}"
 
           # Collect entries: [region, arch, new_ami, old_ami]
@@ -1225,6 +1266,10 @@ jobs:
               region=$(echo "$entry" | cut -d: -f1)
               new_ami=$(echo "$entry" | cut -d: -f2)
               old_ami="${old_amis["${region}:x64"]:-}"
+              if [ "$new_ami" = "$old_ami" ]; then
+                echo "ERROR: ${region}/x64 AMI ${new_ami} is already deployed; re-run of a merged release?"
+                exit 1
+              fi
               entries+=("    [\"${region}\", \"x64\", \"${new_ami}\", \"${old_ami}\"]")
             done
           fi
@@ -1235,16 +1280,32 @@ jobs:
               region=$(echo "$entry" | cut -d: -f1)
               new_ami=$(echo "$entry" | cut -d: -f2)
               old_ami="${old_amis["${region}:arm64"]:-}"
+              if [ "$new_ami" = "$old_ami" ]; then
+                echo "ERROR: ${region}/arm64 AMI ${new_ami} is already deployed; re-run of a merged release?"
+                exit 1
+              fi
               entries+=("    [\"${region}\", \"arm64\", \"${new_ami}\", \"${old_ami}\"]")
             done
           fi
 
           # Collect GCE entries: [arch, new_name, old_name]
+          check_gce_entry() {
+            if [ -z "$3" ]; then
+              echo "ERROR: no previous $1 GCE image name found in migrate/*.rb; write this migration by hand"
+              exit 1
+            fi
+            if [ "$2" = "$3" ]; then
+              echo "ERROR: $1 GCE image $2 is already deployed; re-run of a merged release?"
+              exit 1
+            fi
+          }
           gce_entries=()
           if [ -n "$x64_gce_image" ]; then
+            check_gce_entry x64 "$x64_gce_image" "$old_x64_gce"
             gce_entries+=("    [\"x64\", \"${x64_gce_image}\", \"${old_x64_gce}\"]")
           fi
           if [ -n "$arm64_gce_image" ]; then
+            check_gce_entry arm64 "$arm64_gce_image" "$old_arm64_gce"
             gce_entries+=("    [\"arm64\", \"${arm64_gce_image}\", \"${old_arm64_gce}\"]")
           fi
 
@@ -1254,7 +1315,6 @@ jobs:
 
           Sequel.migration do
           MIGRATION_HEADER
-          sed -i 's/^          //' "${migration_file}"
 
           if [ ${#entries[@]} -eq 0 ]; then
             echo "  ami_ids = []" >> "${migration_file}"
@@ -1280,31 +1340,37 @@ jobs:
 
             up do
               ami_ids.each do |location_name, arch, new_ami, old_ami|
+                next if old_ami.empty?
                 from(:pg_aws_ami)
                   .where(aws_location_name: location_name, arch:, aws_ami_id: old_ami)
                   .update(aws_ami_id: new_ami)
               end
 
-              gce_images.each do |arch, new_name, _old_name|
-                from(:pg_gce_image).where(arch:).update(gce_image_name: new_name)
+              gce_images.each do |arch, new_name, old_name|
+                raise Sequel::Error, "previous GCE image name unknown" if old_name.empty?
+                from(:pg_gce_image)
+                  .where(arch:, gce_image_name: old_name)
+                  .update(gce_image_name: new_name)
               end
             end
 
             down do
               ami_ids.each do |location_name, arch, new_ami, old_ami|
+                next if old_ami.empty?
                 from(:pg_aws_ami)
                   .where(aws_location_name: location_name, arch:, aws_ami_id: new_ami)
                   .update(aws_ami_id: old_ami)
               end
 
-              gce_images.each do |arch, _new_name, old_name|
+              gce_images.each do |arch, new_name, old_name|
                 raise Sequel::Error, "irreversible: previous GCE image name unknown" if old_name.empty?
-                from(:pg_gce_image).where(arch:).update(gce_image_name: old_name)
+                from(:pg_gce_image)
+                  .where(arch:, gce_image_name: new_name)
+                  .update(gce_image_name: old_name)
               end
             end
           end
           MIGRATION_FOOTER
-          sed -i 's/^          //' "${migration_file}"
 
           echo "Created migration file: ${migration_file}"
           cat "${migration_file}"
@@ -1312,6 +1378,7 @@ jobs:
       - name: Create Pull Request
         env:
           GH_TOKEN: ${{ secrets.UBICLOUD_REPO_PAT }}
+          IMAGE_SUFFIX: ${{ inputs.image_suffix }}
         run: |
           cd ubicloud
 
@@ -1322,39 +1389,33 @@ jobs:
           # Configure git to use the PAT for authentication
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/ubicloud/ubicloud.git"
 
-          branch_name="update-postgres-images-${{ inputs.image_suffix }}"
+          branch_name="update-postgres-images-${IMAGE_SUFFIX}"
 
-          # Check if PR already exists for this branch
-          existing_pr=$(gh pr list --repo ubicloud/ubicloud --head "${branch_name}" --json number -q '.[0].number' 2>/dev/null || echo "")
+          # Force push so a re-run refreshes the branch and any open PR for
+          # it instead of keeping a stale previous run's content
+          git checkout -b "${branch_name}"
+          git add -A
+          git commit -m "Update postgres images to ${IMAGE_SUFFIX}"
+          git push --force -u origin "${branch_name}"
+
+          existing_pr=$(gh pr list --repo ubicloud/ubicloud --head "${branch_name}" --json number -q '.[0].number' || echo "")
           if [ -n "$existing_pr" ]; then
-            echo "PR #${existing_pr} already exists for branch ${branch_name}"
-            echo "### Existing PR" >> $GITHUB_STEP_SUMMARY
+            echo "Updated existing PR #${existing_pr} for branch ${branch_name}"
+            echo "### Existing PR updated" >> $GITHUB_STEP_SUMMARY
             gh pr view --repo ubicloud/ubicloud "${existing_pr}" --json url -q '.url' >> $GITHUB_STEP_SUMMARY
             exit 0
           fi
 
-          # Delete remote branch if it exists (from failed previous run)
-          git push origin --delete "${branch_name}" 2>/dev/null || true
-
-          # Create branch and commit
-          git checkout -b "${branch_name}"
-          git add -A
-          git commit -m "Update postgres images to ${{ inputs.image_suffix }}"
-
-          # Push branch
-          git push -u origin "${branch_name}"
-
-          # Create PR
           gh pr create \
             --repo ubicloud/ubicloud \
             --head "${branch_name}" \
-            --title "Update postgres images to ${{ inputs.image_suffix }}" \
+            --title "Update postgres images to ${IMAGE_SUFFIX}" \
             --body "## Summary
           - Updates boot image version and SHA256 hashes in \`prog/download_boot_image.rb\`
           - Adds a single migration updating AWS AMI IDs in \`pg_aws_ami\` and GCE image names in \`pg_gce_image\`
 
           ## Image Version
-          \`${{ inputs.image_suffix }}\`
+          \`${IMAGE_SUFFIX}\`
 
           ## Changes
           - x64 SHA256: \`${{ steps.collect.outputs.x64_sha256 }}\`
