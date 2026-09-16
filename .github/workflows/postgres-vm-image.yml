@@ -1195,78 +1195,114 @@ jobs:
           timestamp=$(date +%Y%m%d)
           migration_file="migrate/${timestamp}_update_postgres_images.rb"
 
+          release="${{ inputs.ubuntu_release }}"
+          family="ubuntu-${release}"
+
           x64_amis="${{ steps.collect.outputs.x64_ami_ids }}"
           arm64_amis="${{ steps.collect.outputs.arm64_ami_ids }}"
           x64_gce_image="${{ steps.collect.outputs.x64_gce_image_name }}"
           arm64_gce_image="${{ steps.collect.outputs.arm64_gce_image_name }}"
 
-          # Find old AMIs from previous migration files (keyed by region:arch)
+          # Attribute a migration file to an image family. Generated update
+          # migrations carry an explicit `family = "ubuntu-XXXX"`; the register
+          # migration tags its rows with a bare "ubuntu-XXXX" literal; anything
+          # older predates families and is implicitly ubuntu-2204. This keeps
+          # the old-value scan from crossing families once several coexist.
+          file_family() {
+            local f="$1" fam
+            fam=$(grep -oE 'family = "ubuntu-[0-9]+"' "$f" 2>/dev/null | head -1 | grep -oE 'ubuntu-[0-9]+' || true)
+            if [ -n "$fam" ]; then echo "$fam"; return; fi
+            fam=$(grep -oE '"ubuntu-[0-9]+"' "$f" 2>/dev/null | head -1 | tr -d '"' || true)
+            if [ -n "$fam" ]; then echo "$fam"; return; fi
+            echo "ubuntu-2204"
+          }
+
+          # Current AMIs for this family, keyed by region:arch (last migration wins).
           declare -A old_amis
-          echo "=== Searching for existing AMIs in migration files ==="
+          echo "=== Scanning ${family} AMIs in migration files ==="
           for migration in $(ls -1 migrate/*.rb 2>/dev/null | sort); do
-            # Match ["region", "arch", "ami-..."] or ["region", "arch", "ami-...", "ami-..."]
+            [ "$(file_family "$migration")" = "$family" ] || continue
+            # generated update form: ["region", "arch", "new-ami", "old-ami"] -> new is current
             while IFS= read -r match; do
-              region=$(echo "$match" | sed -E 's/.*\["([^"]+)".*/\1/')
-              arch=$(echo "$match" | sed -E 's/.*",\s*"(x64|arm64)".*/\1/')
-              ami=$(echo "$match" | sed -E 's/.*",\s*"(x64|arm64)",\s*"(ami-[^"]+)".*/\2/')
-              if [[ "$ami" =~ ^ami- ]]; then
-                old_amis["${region}:${arch}"]="$ami"
-              fi
-            done < <(grep -oE '\["[^"]+",\s*"(x64|arm64)",\s*"ami-[^"]+"' "$migration" 2>/dev/null || true)
+              region=$(echo "$match" | sed -E 's/^\["([^"]+)".*/\1/')
+              arch=$(echo "$match" | sed -E 's/.*",[[:space:]]*"(x64|arm64)".*/\1/')
+              ami=$(echo "$match" | grep -oE 'ami-[0-9a-f]+' | head -1)
+              [ -n "$ami" ] && old_amis["${region}:${arch}"]="$ami"
+            done < <(grep -oE '\["[^"]+",[[:space:]]*"(x64|arm64)",[[:space:]]*"ami-[^"]+"' "$migration" 2>/dev/null || true)
+            # register/import form: ["region", "arch"] => "ami-..." -> current
+            while IFS= read -r match; do
+              region=$(echo "$match" | sed -E 's/^\["([^"]+)".*/\1/')
+              arch=$(echo "$match" | sed -E 's/.*",[[:space:]]*"(x64|arm64)".*/\1/')
+              ami=$(echo "$match" | grep -oE 'ami-[0-9a-f]+' | head -1)
+              [ -n "$ami" ] && old_amis["${region}:${arch}"]="$ami"
+            done < <(grep -oE '\["[^"]+",[[:space:]]*"(x64|arm64)"\][[:space:]]*=>[[:space:]]*"ami-[^"]+"' "$migration" 2>/dev/null || true)
           done
+          echo "Found ${#old_amis[@]} current ${family} AMI entries"
 
-          echo "Found ${#old_amis[@]} existing AMI entries"
-
-          # Find old GCE image names from previous migration files (last match wins)
+          # Current GCE image names for this family, per arch (last migration wins).
           old_x64_gce=""
           old_arm64_gce=""
           for migration in $(ls -1 migrate/*.rb 2>/dev/null | sort); do
-            m=$(grep -oE 'postgres-ubuntu-[0-9]+-x64-[0-9][0-9-]*[0-9]' "$migration" 2>/dev/null | tail -1 || true)
-            [ -n "$m" ] && old_x64_gce="$m"
-            m=$(grep -oE 'postgres-ubuntu-[0-9]+-arm64-[0-9][0-9-]*[0-9]' "$migration" 2>/dev/null | tail -1 || true)
-            [ -n "$m" ] && old_arm64_gce="$m"
+            [ "$(file_family "$migration")" = "$family" ] || continue
+            for arch in x64 arm64; do
+              # generated update form: ["arch", "postgres-ubuntu-<rel>-<arch>-...new", ...]
+              name=$(grep -oE "\[\"${arch}\",[[:space:]]*\"postgres-ubuntu-${release}-${arch}-[0-9][0-9-]*[0-9]\"" "$migration" 2>/dev/null | head -1 | grep -oE "postgres-ubuntu-${release}-${arch}-[0-9][0-9-]*[0-9]" | head -1 || true)
+              # register/import form: ["postgres-ubuntu-<rel>-<arch>-...", "arch", ...]
+              if [ -z "$name" ]; then
+                name=$(grep -oE "\[\"postgres-ubuntu-${release}-${arch}-[0-9][0-9-]*[0-9]\",[[:space:]]*\"${arch}\"" "$migration" 2>/dev/null | head -1 | grep -oE "postgres-ubuntu-${release}-${arch}-[0-9][0-9-]*[0-9]" | head -1 || true)
+              fi
+              if [ -n "$name" ]; then
+                [ "$arch" = "x64" ] && old_x64_gce="$name"
+                [ "$arch" = "arm64" ] && old_arm64_gce="$name"
+              fi
+            done
           done
-          echo "Old GCE images: x64=${old_x64_gce:-none} arm64=${old_arm64_gce:-none}"
+          echo "Current ${family} GCE images: x64=${old_x64_gce:-none} arm64=${old_arm64_gce:-none}"
 
-          # Collect entries: [region, arch, new_ami, old_ami]
+          # AMI entries: [region, arch, new, old]
           entries=()
-
-          if [ -n "$x64_amis" ]; then
-            IFS=',' read -ra AMI_ARRAY <<< "$x64_amis"
+          add_ami_entries() {
+            local list="$1" arch="$2" entry region new_ami old_ami
+            [ -n "$list" ] || return 0
+            IFS=',' read -ra AMI_ARRAY <<< "$list"
             for entry in "${AMI_ARRAY[@]}"; do
               region=$(echo "$entry" | cut -d: -f1)
               new_ami=$(echo "$entry" | cut -d: -f2)
-              old_ami="${old_amis["${region}:x64"]:-}"
-              entries+=("    [\"${region}\", \"x64\", \"${new_ami}\", \"${old_ami}\"]")
+              old_ami="${old_amis["${region}:${arch}"]:-}"
+              entries+=("    [\"${region}\", \"${arch}\", \"${new_ami}\", \"${old_ami}\"]")
             done
-          fi
+          }
+          add_ami_entries "$x64_amis" "x64"
+          add_ami_entries "$arm64_amis" "arm64"
 
-          if [ -n "$arm64_amis" ]; then
-            IFS=',' read -ra AMI_ARRAY <<< "$arm64_amis"
-            for entry in "${AMI_ARRAY[@]}"; do
-              region=$(echo "$entry" | cut -d: -f1)
-              new_ami=$(echo "$entry" | cut -d: -f2)
-              old_ami="${old_amis["${region}:arm64"]:-}"
-              entries+=("    [\"${region}\", \"arm64\", \"${new_ami}\", \"${old_ami}\"]")
-            done
-          fi
-
-          # Collect GCE entries: [arch, new_name, old_name]
+          # GCE entries: [arch, new, old], guarded against junk old values.
           gce_entries=()
-          if [ -n "$x64_gce_image" ]; then
-            gce_entries+=("    [\"x64\", \"${x64_gce_image}\", \"${old_x64_gce}\"]")
-          fi
-          if [ -n "$arm64_gce_image" ]; then
-            gce_entries+=("    [\"arm64\", \"${arm64_gce_image}\", \"${old_arm64_gce}\"]")
-          fi
+          add_gce_entry() {
+            local arch="$1" new_name="$2" old_name="$3"
+            [ -n "$new_name" ] || return 0
+            if [ -z "$old_name" ]; then
+              echo "ERROR: no previous ${family} GCE image name found for ${arch}; refusing to emit an irreversible migration." >&2
+              exit 1
+            fi
+            if [ "$new_name" = "$old_name" ]; then
+              echo "ERROR: new ${arch} GCE image name equals the current one (${new_name}); already-merged release respin." >&2
+              exit 1
+            fi
+            gce_entries+=("    [\"${arch}\", \"${new_name}\", \"${old_name}\"]")
+          }
+          add_gce_entry "x64" "$x64_gce_image" "$old_x64_gce"
+          add_gce_entry "arm64" "$arm64_gce_image" "$old_arm64_gce"
 
-          # Build the migration file
+          # Build the migration file. Every UPDATE is scoped by family so a bump
+          # to one image family never rewrites another family's rows, and each
+          # UPDATE asserts its affected row count to catch a silent no-op.
           cat > "${migration_file}" << 'MIGRATION_HEADER'
           # frozen_string_literal: true
 
           Sequel.migration do
           MIGRATION_HEADER
-          sed -i 's/^          //' "${migration_file}"
+          echo "  family = \"${family}\"" >> "${migration_file}"
+          echo "" >> "${migration_file}"
 
           if [ ${#entries[@]} -eq 0 ]; then
             echo "  ami_ids = []" >> "${migration_file}"
@@ -1292,31 +1328,39 @@ jobs:
 
             up do
               ami_ids.each do |location_name, arch, new_ami, old_ami|
-                from(:pg_aws_ami)
-                  .where(aws_location_name: location_name, arch:, aws_ami_id: old_ami)
+                next if old_ami.empty?
+                count = from(:pg_aws_ami)
+                  .where(aws_location_name: location_name, arch:, family:, aws_ami_id: old_ami)
                   .update(aws_ami_id: new_ami)
+                raise Sequel::Error, "pg_aws_ami: no #{family} row for #{location_name}/#{arch} at #{old_ami}" if count.zero?
               end
 
-              gce_images.each do |arch, new_name, _old_name|
-                from(:pg_gce_image).where(arch:).update(gce_image_name: new_name)
+              gce_images.each do |arch, new_name, old_name|
+                count = from(:pg_gce_image)
+                  .where(arch:, family:, gce_image_name: old_name)
+                  .update(gce_image_name: new_name)
+                raise Sequel::Error, "pg_gce_image: expected 1 #{family} row for #{arch} at #{old_name}, updated #{count}" unless count == 1
               end
             end
 
             down do
               ami_ids.each do |location_name, arch, new_ami, old_ami|
-                from(:pg_aws_ami)
-                  .where(aws_location_name: location_name, arch:, aws_ami_id: new_ami)
+                next if old_ami.empty?
+                count = from(:pg_aws_ami)
+                  .where(aws_location_name: location_name, arch:, family:, aws_ami_id: new_ami)
                   .update(aws_ami_id: old_ami)
+                raise Sequel::Error, "pg_aws_ami: no #{family} row for #{location_name}/#{arch} at #{new_ami}" if count.zero?
               end
 
-              gce_images.each do |arch, _new_name, old_name|
-                raise Sequel::Error, "irreversible: previous GCE image name unknown" if old_name.empty?
-                from(:pg_gce_image).where(arch:).update(gce_image_name: old_name)
+              gce_images.each do |arch, new_name, old_name|
+                count = from(:pg_gce_image)
+                  .where(arch:, family:, gce_image_name: new_name)
+                  .update(gce_image_name: old_name)
+                raise Sequel::Error, "pg_gce_image: expected 1 #{family} row for #{arch} at #{new_name}, updated #{count}" unless count == 1
               end
             end
           end
           MIGRATION_FOOTER
-          sed -i 's/^          //' "${migration_file}"
 
           echo "Created migration file: ${migration_file}"
           cat "${migration_file}"
