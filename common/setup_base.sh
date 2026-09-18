@@ -252,4 +252,17 @@ cp /tmp/common/assets/imds-protection.nftables.conf /etc/nftables.conf
 cp /tmp/common/assets/imds-protection.service /etc/systemd/system/imds-protection.service
 systemctl enable imds-protection.service
 
+# Disable man-db auto-update to avoid slowdowns during package installation.
+echo "=== [setup_base.sh] Disabling man-db index rebuilds ==="
+echo "man-db man-db/auto-update boolean false" | debconf-set-selections
+rm -f /var/lib/man-db/auto-update
+
+# Warm the package archives into the page cache on boot, ahead of the
+# provisioner's install-postgresql-packages run.
+echo "=== [setup_base.sh] Installing package prefetch unit ==="
+cp /tmp/common/assets/scripts/prefetch-pg-packages.sh /usr/local/bin/prefetch-pg-packages
+chmod 755 /usr/local/bin/prefetch-pg-packages
+cp /tmp/common/assets/prefetch-pg-packages.service /etc/systemd/system/prefetch-pg-packages.service
+systemctl enable prefetch-pg-packages.service
+
 echo "=== [setup_base.sh] Complete ==="
