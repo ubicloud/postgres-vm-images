@@ -1,0 +1,281 @@
+name: Build PostgreSQL Cell Images
+run-name: Build cell images ${{ inputs.image_suffix }} ${{ inputs.image_prefix }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_prefix:
+        description: "Prefix for image names (optional)"
+        type: string
+        default: ""
+      image_suffix:
+        description: "Suffix for image names (e.g., YYYYMMDD.X.Y)"
+        type: string
+        required: true
+      root_image_size_gb:
+        description: "Root image size in GB (exact size, not additional space)"
+        required: true
+        default: 6
+        type: number
+      pgdata_image_size_mb:
+        description: "PGDATA image size in MB (exact size, not additional space)"
+        required: true
+        default: 1536
+        type: number
+      build_only:
+        description: "⚡ Build only (skip all uploads) - for testing"
+        default: false
+        type: boolean
+      upload_image:
+        description: "📤 Upload to MinIO (ignored if build_only)"
+        default: false
+        type: boolean
+      upload_r2:
+        description: "📤 Upload to R2 (ignored if build_only)"
+        default: false
+        type: boolean
+      create_ubicloud_pr:
+        description: "🔄 Create PR to ubicloud/ubicloud with updated image versions"
+        default: false
+        type: boolean
+      test_pr_creation:
+        description: "🧪 TEST ONLY: Skip builds, use dummy values to test PR creation"
+        default: false
+        type: boolean
+
+# The cell images carry one PostgreSQL version. A new major gets new images
+# and new download_boot_image.rb entries, not a version input here.
+env:
+  PG_VERSION: "18"
+
+permissions:
+  contents: read
+
+jobs:
+  # Cells run on bare metal only, and x86 restore checks CPUID against the
+  # snapshot's host, so there is one architecture and no cloud image targets.
+  build-x64:
+    name: Build postgres-cell-*-18-x64-${{ inputs.image_suffix }}
+    runs-on: ubicloud-standard-4-ubuntu-2404
+    if: ${{ !inputs.test_pr_creation }}
+    outputs:
+      root_sha256: ${{ steps.compute_sha.outputs.root_sha256 }}
+      pgdata_sha256: ${{ steps.compute_sha.outputs.pgdata_sha256 }}
+    steps:
+      - name: Print inputs
+        run: |
+          echo "Inputs: ${{ toJSON(github.event.inputs) }}"
+          echo "Architecture: x64"
+          echo "PostgreSQL: ${PG_VERSION}"
+
+      - name: Check out code
+        uses: actions/checkout@v6
+
+      - name: Build images
+        run: |
+          sudo ./cell/build.sh "${PG_VERSION}" ${{ inputs.root_image_size_gb }} ${{ inputs.pgdata_image_size_mb }}
+          sudo chown "$(id -u):$(id -g)" cell-root-${PG_VERSION}.raw cell-pgdata-${PG_VERSION}.raw
+
+      - name: Install MinIO client
+        run: |
+          MC_RELEASE=RELEASE.2025-08-13T08-35-41Z
+          MC_SHA256=01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891
+          curl -sfL "https://github.com/minio/mc/releases/download/${MC_RELEASE}/mc.linux-amd64.${MC_RELEASE}" -o mc
+          echo "${MC_SHA256}  mc" | sha256sum -c -
+          sudo mv mc /usr/bin/mc
+          sudo chmod +x /usr/bin/mc
+          mc --version
+
+      - name: Set MinIO root certificates
+        run: |
+          mkdir -p ~/.mc/certs/CAs
+          cat <<EOT > ~/.mc/certs/CAs/ubicloud_images_blob_storage_certs.crt
+          ${{ secrets.MINIO_ROOT_CERTIFICATES }}
+          EOT
+
+      - name: Set image name outputs
+        id: set_image_names
+        run: |
+          root_image_name=postgres-cell-root-${PG_VERSION}-x64-${{ inputs.image_suffix }}
+          pgdata_image_name=postgres-cell-pgdata-${PG_VERSION}-x64-${{ inputs.image_suffix }}
+          if [ -n "${{ inputs.image_prefix }}" ]; then
+            root_image_name=${{ inputs.image_prefix }}-${root_image_name}
+            pgdata_image_name=${{ inputs.image_prefix }}-${pgdata_image_name}
+          fi
+          echo "$root_image_name"
+          echo "$pgdata_image_name"
+          echo "ROOT_IMAGE_NAME=$root_image_name" >> $GITHUB_OUTPUT
+          echo "PGDATA_IMAGE_NAME=$pgdata_image_name" >> $GITHUB_OUTPUT
+
+      - name: Rename image files and compute SHA256
+        id: compute_sha
+        run: |
+          root_image_name=${{ steps.set_image_names.outputs.ROOT_IMAGE_NAME }}
+          pgdata_image_name=${{ steps.set_image_names.outputs.PGDATA_IMAGE_NAME }}
+
+          mv cell-root-${PG_VERSION}.raw ${root_image_name}.raw
+          mv cell-pgdata-${PG_VERSION}.raw ${pgdata_image_name}.raw
+
+          for image_name in ${root_image_name} ${pgdata_image_name}; do
+            sha256sum ${image_name}.raw > ${image_name}.raw.sha256
+            echo "### Image ${image_name}" >> $GITHUB_STEP_SUMMARY
+            echo "apparent: $(du -h --apparent-size ${image_name}.raw | cut -f1), actual: $(du -h ${image_name}.raw | cut -f1)" >> $GITHUB_STEP_SUMMARY
+            echo "### SHA256" >> $GITHUB_STEP_SUMMARY
+            cat ${image_name}.raw.sha256 >> $GITHUB_STEP_SUMMARY
+          done
+
+          echo "root_sha256=$(cut -d' ' -f1 ${root_image_name}.raw.sha256)" >> $GITHUB_OUTPUT
+          echo "pgdata_sha256=$(cut -d' ' -f1 ${pgdata_image_name}.raw.sha256)" >> $GITHUB_OUTPUT
+
+      - name: Upload to MinIO
+        if: ${{ inputs.upload_image && !inputs.build_only }}
+        env:
+          MC_HOST_ubicloud: ${{ secrets.MINIO_CONNECTION_STRING }}
+        run: |
+          for image_name in ${{ steps.set_image_names.outputs.ROOT_IMAGE_NAME }} ${{ steps.set_image_names.outputs.PGDATA_IMAGE_NAME }}; do
+            mc cp ./${image_name}.raw ubicloud/ubicloud-images/${image_name}.raw
+            mc cp ./${image_name}.raw.sha256 ubicloud/ubicloud-images/${image_name}.raw.sha256
+          done
+
+          echo "### MinIO Upload" >> $GITHUB_STEP_SUMMARY
+          echo "Uploaded ${{ steps.set_image_names.outputs.ROOT_IMAGE_NAME }}.raw and ${{ steps.set_image_names.outputs.PGDATA_IMAGE_NAME }}.raw" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload to R2
+        if: ${{ inputs.upload_r2 == true && !inputs.build_only }}
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          if [ -z "${R2_BUCKET}" ] || [ -z "${R2_ENDPOINT}" ]; then
+            echo "R2 secrets not configured, skipping R2 upload"
+            exit 0
+          fi
+
+          # Set up mc alias for R2
+          mc alias set r2 "${R2_ENDPOINT}" "${R2_ACCESS_KEY_ID}" "${R2_SECRET_ACCESS_KEY}"
+
+          echo "Uploading to R2..."
+          for image_name in ${{ steps.set_image_names.outputs.ROOT_IMAGE_NAME }} ${{ steps.set_image_names.outputs.PGDATA_IMAGE_NAME }}; do
+            mc cp ./${image_name}.raw r2/${R2_BUCKET}/${image_name}.raw
+            mc cp ./${image_name}.raw.sha256 r2/${R2_BUCKET}/${image_name}.raw.sha256
+          done
+
+          echo "### R2 Upload" >> $GITHUB_STEP_SUMMARY
+          echo "Uploaded to R2" >> $GITHUB_STEP_SUMMARY
+
+  # Create PR to ubicloud/ubicloud with updated image versions
+  create-ubicloud-pr:
+    name: Create PR to ubicloud/ubicloud
+    runs-on: ubicloud-standard-2-ubuntu-2404
+    needs: [build-x64]
+    if: ${{ always() && (inputs.test_pr_creation || (inputs.create_ubicloud_pr && !inputs.build_only && needs.build-x64.result == 'success')) }}
+    steps:
+      - name: Collect build outputs
+        id: collect
+        run: |
+          # Image names for download_boot_image.rb. The sed in this job
+          # replaces an existing version line, so both blocks must already
+          # exist in ubicloud's prog/download_boot_image.rb BOOT_IMAGE_SHA256
+          # before this job can update them.
+          echo "root_image_name=postgres-cell-root-${PG_VERSION}" >> $GITHUB_OUTPUT
+          echo "pgdata_image_name=postgres-cell-pgdata-${PG_VERSION}" >> $GITHUB_OUTPUT
+          echo "version=${{ inputs.image_suffix }}" >> $GITHUB_OUTPUT
+
+          # Check if running in test mode
+          if [ "${{ inputs.test_pr_creation }}" = "true" ]; then
+            echo "🧪 TEST MODE: Using dummy values"
+            echo "root_sha256=dummy_root_sha256_for_testing_0123456789abcdef" >> $GITHUB_OUTPUT
+            echo "pgdata_sha256=dummy_pgdata_sha256_for_testing_fedcba9876543210" >> $GITHUB_OUTPUT
+          else
+            echo "root_sha256=${{ needs.build-x64.outputs.root_sha256 }}" >> $GITHUB_OUTPUT
+            echo "pgdata_sha256=${{ needs.build-x64.outputs.pgdata_sha256 }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Clone ubicloud/ubicloud
+        run: |
+          git clone --depth 1 https://github.com/ubicloud/ubicloud.git ubicloud
+
+      - name: Update download_boot_image.rb
+        run: |
+          cd ubicloud
+          version="${{ steps.collect.outputs.version }}"
+
+          # BOOT_IMAGE_SHA256 uses a nested hash: "image" => { "arch" => { "version" => "sha" } }
+          # Replace the existing "version" => "sha" entry under x64 for each image
+          update_entry() {
+            local image_name="$1" sha="$2"
+            if ! grep -q "\"${image_name}\" => {" prog/download_boot_image.rb; then
+              echo "ERROR: no \"${image_name}\" block in prog/download_boot_image.rb; add one before running this job"
+              exit 1
+            fi
+            sed -i "/\"${image_name}\" => {/,/^    },/ { /\"x64\" => {/,/^      },/ s|\"[^\"]*\" => \"[^\"]*\",|\"${version}\" => \"${sha}\",| ; }" prog/download_boot_image.rb
+            echo "Updated x64 entry: ${image_name} -> ${version}"
+          }
+
+          update_entry "${{ steps.collect.outputs.root_image_name }}" "${{ steps.collect.outputs.root_sha256 }}"
+          update_entry "${{ steps.collect.outputs.pgdata_image_name }}" "${{ steps.collect.outputs.pgdata_sha256 }}"
+
+          # Show the changes
+          echo "=== Updated entries ==="
+          git diff prog/download_boot_image.rb
+          if git diff --quiet prog/download_boot_image.rb; then
+            echo "ERROR: nothing changed in prog/download_boot_image.rb"
+            exit 1
+          fi
+
+      - name: Create Pull Request
+        env:
+          GH_TOKEN: ${{ secrets.UBICLOUD_REPO_PAT }}
+        run: |
+          cd ubicloud
+
+          # Configure git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Configure git to use the PAT for authentication
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/ubicloud/ubicloud.git"
+
+          branch_name="update-postgres-cell-images-${{ inputs.image_suffix }}"
+
+          # Check if PR already exists for this branch
+          existing_pr=$(gh pr list --repo ubicloud/ubicloud --head "${branch_name}" --json number -q '.[0].number' 2>/dev/null || echo "")
+          if [ -n "$existing_pr" ]; then
+            echo "PR #${existing_pr} already exists for branch ${branch_name}"
+            echo "### Existing PR" >> $GITHUB_STEP_SUMMARY
+            gh pr view --repo ubicloud/ubicloud "${existing_pr}" --json url -q '.url' >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          # Delete remote branch if it exists (from failed previous run)
+          git push origin --delete "${branch_name}" 2>/dev/null || true
+
+          # Create branch and commit
+          git checkout -b "${branch_name}"
+          git add -A
+          git commit -m "Update postgres cell images to ${{ inputs.image_suffix }}"
+
+          # Push branch
+          git push -u origin "${branch_name}"
+
+          # Create PR
+          gh pr create \
+            --repo ubicloud/ubicloud \
+            --head "${branch_name}" \
+            --title "Update postgres cell images to ${{ inputs.image_suffix }}" \
+            --body "## Summary
+          - Updates the cell root and PGDATA image versions and SHA256 hashes in \`prog/download_boot_image.rb\`
+
+          ## Image Version
+          \`${{ inputs.image_suffix }}\`
+
+          ## Changes
+          - ${{ steps.collect.outputs.root_image_name }} SHA256: \`${{ steps.collect.outputs.root_sha256 }}\`
+          - ${{ steps.collect.outputs.pgdata_image_name }} SHA256: \`${{ steps.collect.outputs.pgdata_sha256 }}\`
+
+          🤖 Generated by [postgres-vm-images](https://github.com/ubicloud/postgres-vm-images) workflow"
+
+          echo "### PR Created" >> $GITHUB_STEP_SUMMARY
+          gh pr view --repo ubicloud/ubicloud "${branch_name}" --json url -q '.url' >> $GITHUB_STEP_SUMMARY

@@ -122,3 +122,22 @@ PostgreSQL from apt.postgresql.org and the hot-plug chain from `cell/guest/`:
 The PGDATA image is a journalled ext4 with a fresh `initdb --data-checksums`
 cluster, the cell's `postgresql.conf` settings and a `pg_hba.conf` that trusts
 the postgres role from the slot's tap address only.
+
+### Workflow (`postgres-cell-image.yml`)
+
+x64 and PostgreSQL 18 only; uploads to MinIO and R2; opens the image-update
+PR against ubicloud/ubicloud, which replaces the version line under the
+`postgres-cell-root-18` and `postgres-cell-pgdata-18` entries of
+`BOOT_IMAGE_SHA256` in `prog/download_boot_image.rb` (both must already
+exist).
+
+| Input | Description |
+|-------|-------------|
+| `image_suffix` | Version suffix (e.g., 20260115.1.0) |
+| `root_image_size_gb` | Root image size |
+| `pgdata_image_size_mb` | PGDATA image size |
+| `upload_image` | Upload to MinIO |
+| `upload_r2` | Upload to Cloudflare R2 |
+| `build_only` | Skip all uploads |
+| `create_ubicloud_pr` | Open an image-update PR against ubicloud/ubicloud |
+| `test_pr_creation` | Skip the build and open the PR with dummy hashes |
