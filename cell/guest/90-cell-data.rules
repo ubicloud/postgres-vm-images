@@ -1,0 +1,3 @@
+# The data disk's hot-plug is what brings PostgreSQL up: nothing in the guest
+# listens for the host. The host names the disk by its serial.
+ACTION=="add", SUBSYSTEM=="block", KERNEL=="vd*[!0-9]", ATTR{serial}=="cldata", TAG+="systemd", ENV{SYSTEMD_WANTS}+="cell-postgres.service"
