@@ -1,0 +1,18 @@
+[Unit]
+Description=PostgreSQL on the cell data volume
+Requires=data.mount
+After=data.mount
+
+[Service]
+Type=notify
+User=postgres
+Group=postgres
+RuntimeDirectory=postgresql
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/lib/postgresql/@PGVER@/bin/postgres -D /data/pgdata
+ExecReload=/bin/kill -HUP $MAINPID
+# Fast shutdown on the way down; a pause is the ACPI power button.
+KillMode=mixed
+KillSignal=SIGINT
+TimeoutStartSec=infinity
+TimeoutStopSec=30

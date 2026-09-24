@@ -1,0 +1,16 @@
+# Pause is the ACPI power button. Nothing but PostgreSQL and /data matters on
+# the way down -- the root is a throwaway overlay -- so once both are stopped,
+# sync and power off instead of stopping every other unit in turn. A start
+# ordered after a stop always waits for the stop.
+[Unit]
+Description=Power off as soon as the data volume is released
+DefaultDependencies=no
+After=cell-postgres.service data.mount
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sync
+ExecStart=/usr/bin/systemctl poweroff --force --force
+
+[Install]
+WantedBy=poweroff.target

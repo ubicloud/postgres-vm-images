@@ -1,0 +1,10 @@
+[Unit]
+Description=Reseed the CRNG and set the clock in a restored clone
+DefaultDependencies=no
+BindsTo=dev-disk-by\x2did-virtio\x2dcldata.device
+After=dev-disk-by\x2did-virtio\x2dcldata.device
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/cell-restore-hook

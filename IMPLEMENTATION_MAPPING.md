@@ -101,3 +101,24 @@ The workflow (`postgres-vm-image.yml`) supports:
 | `aws_ami_regions` | Regions for AMI copies |
 | `build_arm64` | Build ARM64 in addition to x64 |
 | `create_ubicloud_pr` | Open an image-update PR against ubicloud/ubicloud |
+
+## Postgres Cell Images
+
+`cell/build.sh` builds the two images a Postgres cell runs from. It takes the
+Ubuntu noble cloud image (or `BASE`, a local raw copy of it), grows it, mounts
+it via a loop device and chroots into it like `build.sh` does, then installs
+PostgreSQL from apt.postgresql.org and the hot-plug chain from `cell/guest/`:
+
+| File | Role |
+|------|------|
+| `90-cell-data.rules` | udev: the data disk (serial `cldata`) wants `cell-postgres.service` |
+| `cell-restore-hook.c` / `.service` | Static binary run when the disk appears: reseed the CRNG from virtio-rng, set the clock from ptp_kvm |
+| `fsck-after-restore-hook.conf` | Drop-in ordering the disk's `systemd-fsck@` after the hook |
+| `data.mount` | `/data`, bound to the disk, outside `local-fs.target` |
+| `cell-postgres.service` | `postgres -D /data/pgdata`, fast shutdown on stop |
+| `cell-fast-off.service` | On poweroff: once PostgreSQL and `/data` are down, sync and power off |
+| `cell-template-ready.service` | Template builds only: announce a settled boot on the serial port |
+
+The PGDATA image is a journalled ext4 with a fresh `initdb --data-checksums`
+cluster, the cell's `postgresql.conf` settings and a `pg_hba.conf` that trusts
+the postgres role from the slot's tap address only.

@@ -1,0 +1,18 @@
+# Template builds only: say on the serial port, which the host is reading,
+# once boot has settled, the disk is synced and the binaries the restore path
+# runs are in the page cache. A clone restored from the snapshot never runs
+# this again. The restore hook is read rather than run: running it would
+# leave it active in the snapshot, and no clone would run it at all.
+[Unit]
+Description=Announce that the template guest has settled
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/bin/sh -c 'systemctl is-system-running --wait >/dev/null; \
+  /usr/lib/postgresql/@PGVER@/bin/postgres --version >/dev/null; \
+  cat /usr/local/sbin/cell-restore-hook /sbin/fsck.ext4 >/dev/null; \
+  sync; echo CELL-TEMPLATE-READY > /dev/ttyS0'
+
+[Install]
+WantedBy=multi-user.target
