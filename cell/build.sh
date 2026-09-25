@@ -297,4 +297,4 @@ trap - EXIT
 cp --sparse=always "$WORK/root.raw" "$ROOT_IMG"
 log "  $(basename "$ROOT_IMG"): $(du -h --apparent-size "$ROOT_IMG" | cut -f1) apparent, $(du -h "$ROOT_IMG" | cut -f1) actual"
 remove_work
-log done
+log "done"
