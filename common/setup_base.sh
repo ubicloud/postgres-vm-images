@@ -132,6 +132,38 @@ Compress=yes
 ForwardToSyslog=no
 EOF
 
+echo "=== [setup_base.sh] Enabling core dumps for PostgreSQL ==="
+
+# systemd-coredump symbolizes the stack trace into the journal using the
+# postgresql-*-dbgsym packages from the package lists. On noble and later it
+# replaces apport-core-dump-handler; jammy's apport.service still rewrites
+# kernel.core_pattern at boot, so mask it. The postinst applies its sysctl
+# through the bind-mounted /proc, which is the build machine's; restore it.
+BUILD_HOST_CORE_PATTERN=$(cat /proc/sys/kernel/core_pattern)
+apt-get install -y systemd-coredump
+echo "$BUILD_HOST_CORE_PATTERN" > /proc/sys/kernel/core_pattern
+systemctl mask apport.service
+
+# Cores land on the small root disk next to the journal, so cap them.
+mkdir -p /etc/systemd/coredump.conf.d
+cat <<'EOF' > /etc/systemd/coredump.conf.d/50-postgres.conf
+[Coredump]
+Storage=external
+Compress=yes
+ProcessSizeMax=2G
+ExternalSizeMax=2G
+MaxUse=2G
+EOF
+
+# The unit's default soft RLIMIT_CORE of 0 makes systemd-coredump drop the
+# core. Leave shared memory out of it: shared_buffers is a large share of RAM.
+mkdir -p /etc/systemd/system/postgresql@.service.d
+cat <<'EOF' > /etc/systemd/system/postgresql@.service.d/50-coredump.conf
+[Service]
+LimitCORE=infinity
+CoredumpFilter=private-anonymous elf-headers private-huge
+EOF
+
 # Install dependency libraries required by PostgreSQL extensions
 # These are installed now so dpkg can install extensions at runtime without apt-get update
 # Library package names carry sonames (and the noble-era t64 suffix), so

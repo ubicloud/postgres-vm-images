@@ -20,6 +20,7 @@ This approach is significantly faster than QEMU-based builds, especially on ARM6
 - Adds golang PPA for WAL-G build
 - Installs postgresql-common
 - Configures createcluster.conf (data checksums, no auto cluster)
+- Enables symbolized PostgreSQL core dumps (systemd-coredump, capped at 2G)
 - Downloads PostgreSQL packages for versions 16, 17, 18
 - Creates users: prometheus, ubi_monitoring
 - Creates cert_readers group
