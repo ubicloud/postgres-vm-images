@@ -1,0 +1,13 @@
+[Unit]
+Description=Prefetch PostgreSQL package archives into the page cache
+Documentation=file:/usr/local/bin/prefetch-pg-packages
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/prefetch-pg-packages
+Nice=10
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
