@@ -38,7 +38,6 @@ This approach is significantly faster than QEMU-based builds, especially on ARM6
 ### common/setup_monitoring.sh
 - Downloads and installs Prometheus, node_exporter, postgres_exporter
   and otelcol-contrib (see pinned versions in the script)
-- Installs CloudWatch and GuardDuty agents
 - Installs systemd service files
 - Runs a ClamAV scan of system binaries
 
