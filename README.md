@@ -40,7 +40,7 @@ through sudo and coreutils and depends on exact GNU behavior.
 - Node Exporter v1.11.1
 - Postgres Exporter v0.19.1
 - OpenTelemetry Collector (contrib)
-- CloudWatch agent, GuardDuty agent (AWS), ClamAV scan at build time
+- ClamAV scan at build time
 
 ### Configuration
 - Data checksums enabled by default

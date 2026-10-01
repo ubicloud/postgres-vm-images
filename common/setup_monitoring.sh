@@ -61,14 +61,6 @@ cp /tmp/common/assets/wal-g.service /etc/systemd/system/wal-g.service
 echo "[setup_monitoring.sh] Reloading systemd daemon..."
 systemctl daemon-reload
 
-# =============================================
-# Amazon GuardDuty Agent (for AWS Runtime Monitoring)
-# =============================================
-echo "=== [setup_monitoring.sh] Installing Amazon GuardDuty Agent ==="
-
-dpkg -i /tmp/amazon-guardduty-agent.deb
-rm -f /tmp/amazon-guardduty-agent.deb
-
 # Validate the IMDS ruleset (staged at /etc/nftables.conf in setup_base.sh)
 # now that the otelcol-contrib user it references exists. nft -c resolves
 # skuid names to uids, so this must run after the otel collector install.
