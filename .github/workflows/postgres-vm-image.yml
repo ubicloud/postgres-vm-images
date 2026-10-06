@@ -1357,7 +1357,7 @@ jobs:
           title="Update ${image_name} images to ${version}"
 
           # Check if PR already exists for this branch
-          existing_pr=$(gh pr list --repo ubicloud/ubicloud --head "${branch_name}" --json number -q '.[0].number' 2>/dev/null || echo "")
+          existing_pr=$(gh pr list --repo ubicloud/ubicloud --head "${branch_name}" --json number -q '.[0].number')
           if [ -n "$existing_pr" ]; then
             echo "PR #${existing_pr} already exists for branch ${branch_name}"
             echo "### Existing PR" >> $GITHUB_STEP_SUMMARY
