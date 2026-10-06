@@ -93,7 +93,8 @@ The workflow (`postgres-vm-image.yml`) supports:
 |-------|-------------|
 | `image_suffix` | Version suffix (e.g., 20260115.1.0) |
 | `image_resize_gb` | Final image size |
-| `ubuntu_release` | Ubuntu release to build on (2604/2204) |
+| `ubuntu_2604` | Build ubuntu-2604 images |
+| `ubuntu_2204` | Build ubuntu-2204 images |
 | `upload_image` | Upload to MinIO |
 | `upload_r2` | Upload to Cloudflare R2 |
 | `upload_aws_ami` | Create AWS AMI |

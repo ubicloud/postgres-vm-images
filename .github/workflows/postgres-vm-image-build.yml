@@ -1,0 +1,1371 @@
+name: Build PostgreSQL VM Image (one release)
+
+# Called by postgres-vm-image.yml once per selected Ubuntu release.
+on:
+  workflow_call:
+    inputs:
+      image_prefix:
+        type: string
+      image_suffix:
+        type: string
+        required: true
+      image_resize_gb:
+        type: number
+        required: true
+      ubuntu_release:
+        type: string
+        required: true
+      build_only:
+        type: boolean
+      build_arm64:
+        type: boolean
+      run_apt_upgrade:
+        type: boolean
+      upload_image:
+        type: boolean
+      upload_r2:
+        type: boolean
+      upload_gce:
+        type: boolean
+      upload_aws_ami:
+        type: boolean
+      aws_ami_regions:
+        type: string
+      create_ubicloud_pr:
+        type: boolean
+      test_pr_creation:
+        type: boolean
+      use_aws_role:
+        type: boolean
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # x64 build - always runs (unless test_pr_creation is enabled)
+  build-x64:
+    name: Build postgres-ubuntu-${{ inputs.ubuntu_release }}-x64-${{ inputs.image_suffix }}
+    runs-on: ubicloud-standard-4-ubuntu-2404
+    if: ${{ !inputs.test_pr_creation }}
+    outputs:
+      sha256: ${{ steps.compute_sha.outputs.sha256 }}
+      all_ami_ids: ${{ steps.copy_ami.outputs.all_ami_ids }}
+      source_ami_id: ${{ steps.register_ami.outputs.ami_id }}
+      gce_image_name: ${{ steps.create_gce_image.outputs.image_name }}
+      gce_image_project: ${{ steps.create_gce_image.outputs.image_project }}
+    steps:
+      - name: Print inputs
+        run: |
+          echo "Inputs: ${{ toJSON(inputs) }}"
+          echo "Architecture: x64"
+
+      - name: Check out code
+        uses: actions/checkout@v6
+
+      - name: Build image
+        run: sudo ./build.sh ${{ inputs.image_resize_gb }} ${{ inputs.run_apt_upgrade }} ${{ inputs.ubuntu_release }}
+
+      - name: Install MinIO client
+        run: |
+          MC_RELEASE=RELEASE.2025-08-13T08-35-41Z
+          MC_SHA256=01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891
+          curl -sfL "https://github.com/minio/mc/releases/download/${MC_RELEASE}/mc.linux-amd64.${MC_RELEASE}" -o mc
+          echo "${MC_SHA256}  mc" | sha256sum -c -
+          sudo mv mc /usr/bin/mc
+          sudo chmod +x /usr/bin/mc
+          mc --version
+
+      - name: Set MinIO root certificates
+        run: |
+          mkdir -p ~/.mc/certs/CAs
+          cat <<EOT > ~/.mc/certs/CAs/ubicloud_images_blob_storage_certs.crt
+          ${{ secrets.MINIO_ROOT_CERTIFICATES }}
+          EOT
+
+      - name: Set image name output
+        id: set_image_name
+        run: |
+          base_image_name=postgres-ubuntu-${{ inputs.ubuntu_release }}-x64-${{ inputs.image_suffix }}
+          if [ -n "${{ inputs.image_prefix }}" ]; then
+            image_name=${{ inputs.image_prefix }}-${base_image_name}
+          else
+            image_name=${base_image_name}
+          fi
+          echo "$image_name"
+          echo "MINIO_IMAGE_NAME=$image_name" >> $GITHUB_OUTPUT
+          echo "S3_BUCKET_IMAGE_PREFIX=${{ github.run_number }}" >> $GITHUB_OUTPUT
+
+      - name: Rename image file and compute SHA256
+        id: compute_sha
+        run: |
+          image_filename=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}.raw
+          sha_filename=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}.raw.sha256
+          mv postgres-x64-image.raw ${image_filename}
+          sha256sum ${image_filename} > ${sha_filename}
+          sha256=$(cut -d' ' -f1 ${sha_filename})
+          echo "sha256=${sha256}" >> $GITHUB_OUTPUT
+          echo "### Image (x64)" >> $GITHUB_STEP_SUMMARY
+          du -h ${image_filename} >> $GITHUB_STEP_SUMMARY
+          echo "### Image SHA256" >> $GITHUB_STEP_SUMMARY
+          cat ${sha_filename} >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload to MinIO
+        if: ${{ inputs.upload_image && !inputs.build_only }}
+        env:
+          MC_HOST_ubicloud: ${{ secrets.MINIO_CONNECTION_STRING }}
+        run: |
+          image_filename=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}.raw
+          sha_filename=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}.raw.sha256
+
+          mc cp ./${image_filename} ubicloud/ubicloud-images/${image_filename}
+          mc cp ./${sha_filename} ubicloud/ubicloud-images/${sha_filename}
+
+      - name: Upload to R2
+        if: ${{ inputs.upload_r2 == true && !inputs.build_only }}
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          if [ -z "${R2_BUCKET}" ] || [ -z "${R2_ENDPOINT}" ]; then
+            echo "R2 secrets not configured, skipping R2 upload"
+            exit 0
+          fi
+
+          # Set up mc alias for R2
+          mc alias set r2 "${R2_ENDPOINT}" "${R2_ACCESS_KEY_ID}" "${R2_SECRET_ACCESS_KEY}"
+
+          image_filename=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}.raw
+          sha_filename=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}.raw.sha256
+
+          echo "Uploading to R2..."
+          mc cp ./${image_filename} r2/${R2_BUCKET}/${image_filename}
+          mc cp ./${sha_filename} r2/${R2_BUCKET}/${sha_filename}
+
+          echo "### R2 Upload" >> $GITHUB_STEP_SUMMARY
+          echo "Uploaded to R2" >> $GITHUB_STEP_SUMMARY
+
+      - name: Install AWS CLI
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        run: |
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip -q awscliv2.zip
+          sudo ./aws/install --update
+          aws --version
+
+      - name: Configure AWS credentials (role)
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only && inputs.use_aws_role }}
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: postgres-image-${{ job.name }}
+          aws-region: us-west-2
+
+      - name: Configure AWS credentials (access keys)
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only && !inputs.use_aws_role }}
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+
+      - name: Upload image to S3
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        id: s3_upload
+        run: |
+          image_filename=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}.raw
+          s3_bucket=${{ secrets.AWS_S3_BUCKET }}
+          s3_prefix=${{ steps.set_image_name.outputs.S3_BUCKET_IMAGE_PREFIX }}
+
+          echo "Uploading image to S3..."
+          aws s3 cp ./${image_filename} s3://${s3_bucket}/${s3_prefix}/${image_filename}
+
+          echo "image_filename=${image_filename}" >> $GITHUB_OUTPUT
+          echo "s3_bucket=${s3_bucket}" >> $GITHUB_OUTPUT
+
+      - name: Import snapshot to AWS
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        id: import_snapshot
+        run: |
+          image_filename=${{ steps.s3_upload.outputs.image_filename }}
+          s3_bucket=${{ steps.s3_upload.outputs.s3_bucket }}
+          s3_prefix=${{ steps.set_image_name.outputs.S3_BUCKET_IMAGE_PREFIX }}
+          vm_import_role_name="${{ secrets.AWS_VM_IMPORT_ROLE_NAME || 'vmimport' }}"
+
+          cat <<EOT > containers.json
+          {
+            "Description": "${image_filename}",
+            "Format": "raw",
+            "UserBucket": {
+              "S3Bucket": "${s3_bucket}",
+              "S3Key": "${s3_prefix}/${image_filename}"
+            }
+          }
+          EOT
+
+          echo "Starting snapshot import..."
+
+          import_task_id=$(aws ec2 import-snapshot \
+            --role-name "${vm_import_role_name}" \
+            --description "${image_filename}" \
+            --disk-container file://containers.json \
+            --tag-specifications "ResourceType=import-snapshot-task,Tags=[{Key=Name,Value=${image_filename}},{Key=Source,Value=postgres-vm-images},{Key=Architecture,Value=x64}]" \
+            --query ImportTaskId --output text)
+
+          echo "Import task ID: ${import_task_id}"
+          echo "import_task_id=${import_task_id}" >> $GITHUB_OUTPUT
+
+      - name: Wait for snapshot import completion
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        id: wait_snapshot
+        run: |
+          import_task_id=${{ steps.import_snapshot.outputs.import_task_id }}
+
+          while true; do
+            status=$(aws ec2 describe-import-snapshot-tasks \
+              --import-task-ids "${import_task_id}" \
+              --query "ImportSnapshotTasks[0].SnapshotTaskDetail.Status" \
+              --output text)
+            progress=$(aws ec2 describe-import-snapshot-tasks \
+              --import-task-ids "${import_task_id}" \
+              --query "ImportSnapshotTasks[0].SnapshotTaskDetail.Progress" \
+              --output text 2>/dev/null || echo "N/A")
+
+            echo "Status: ${status}, Progress: ${progress}%"
+
+            if [ "${status}" = "completed" ]; then
+              echo "Snapshot import completed successfully."
+              break
+            elif [ "${status}" = "cancelled" ] || [ "${status}" = "failed" ]; then
+              echo "Snapshot import failed!"
+              aws ec2 describe-import-snapshot-tasks --import-task-ids "${import_task_id}"
+              exit 1
+            fi
+
+            sleep 20
+          done
+
+          snapshot_id=$(aws ec2 describe-import-snapshot-tasks \
+            --import-task-ids "${import_task_id}" \
+            --query "ImportSnapshotTasks[0].SnapshotTaskDetail.SnapshotId" \
+            --output text)
+
+          echo "Snapshot ID: ${snapshot_id}"
+          echo "snapshot_id=${snapshot_id}" >> $GITHUB_OUTPUT
+
+          # Tag the snapshot
+          image_filename=${{ steps.s3_upload.outputs.image_filename }}
+          echo "Tagging snapshot ${snapshot_id}..."
+          aws ec2 create-tags \
+            --resources "${snapshot_id}" \
+            --tags "Key=Name,Value=${image_filename}" "Key=Source,Value=postgres-vm-images" "Key=Architecture,Value=x64"
+
+      - name: Register AMI from snapshot
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        id: register_ami
+        run: |
+          ami_name=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}
+          snapshot_id=${{ steps.wait_snapshot.outputs.snapshot_id }}
+
+          ami_id=$(aws ec2 register-image \
+            --name "${ami_name}" \
+            --architecture x86_64 \
+            --virtualization-type hvm \
+            --boot-mode uefi-preferred \
+            --ena-support \
+            --root-device-name /dev/sda1 \
+            --block-device-mappings "[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"SnapshotId\":\"${snapshot_id}\",\"VolumeSize\":${{ inputs.image_resize_gb }},\"VolumeType\":\"gp3\"}}]" \
+            --tag-specifications "ResourceType=image,Tags=[{Key=Name,Value=${ami_name}},{Key=Source,Value=postgres-vm-images},{Key=Architecture,Value=x64}]" \
+            --query "ImageId" \
+            --output text)
+
+          echo "Registered AMI: ${ami_id}"
+          echo "ami_id=${ami_id}" >> $GITHUB_OUTPUT
+
+          echo "### AWS AMI (x64)" >> $GITHUB_STEP_SUMMARY
+          echo "AMI ID: ${ami_id}" >> $GITHUB_STEP_SUMMARY
+          echo "AMI Name: ${ami_name}" >> $GITHUB_STEP_SUMMARY
+          echo "Architecture: x86_64" >> $GITHUB_STEP_SUMMARY
+          echo "Snapshot ID: ${snapshot_id}" >> $GITHUB_STEP_SUMMARY
+          echo "Region: us-west-2" >> $GITHUB_STEP_SUMMARY
+
+      - name: Copy AMI to additional regions
+        if: ${{ inputs.upload_aws_ami && inputs.aws_ami_regions != '' && !inputs.build_only }}
+        id: copy_ami
+        run: |
+          ami_id=${{ steps.register_ami.outputs.ami_id }}
+          ami_name=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}
+          regions="${{ inputs.aws_ami_regions }}"
+
+          echo "Copying AMI ${ami_id} to additional regions: ${regions}"
+          echo "### AMI Copies (x64)" >> $GITHUB_STEP_SUMMARY
+
+          # Store all AMI IDs and account IDs: region:ami_id:account1:account2...
+          all_ami_ids=""
+
+          IFS=',' read -ra REGION_ARRAY <<< "$regions"
+          for entry in "${REGION_ARRAY[@]}"; do
+            entry=$(echo "$entry" | xargs)
+
+            # Parse region:account1:account2:account3 format
+            IFS=':' read -ra PARTS <<< "$entry"
+            region="${PARTS[0]}"
+
+            # Extract account IDs for this region
+            account_ids=""
+            for ((i=1; i<${#PARTS[@]}; i++)); do
+              account_ids="${account_ids}:${PARTS[i]}"
+            done
+
+            copy_args=(
+              --source-region us-west-2
+              --source-image-id "${ami_id}"
+              --name "${ami_name}"
+              --tag-specifications "ResourceType=image,Tags=[{Key=Name,Value=${ami_name}},{Key=Source,Value=postgres-vm-images},{Key=Architecture,Value=x64}]"
+              --region "${region}"
+            )
+
+            kms_key_id="${{ secrets.AWS_AMI_ENCRYPTION_KMS_KEY_ID }}"
+            if [ -n "${kms_key_id}" ]; then
+              copy_args+=(--encrypted --kms-key-id "${kms_key_id}")
+            fi
+
+            copied_ami_id=$(aws ec2 copy-image "${copy_args[@]}" --query "ImageId" --output text)
+
+            echo "Copied AMI to ${region}: ${copied_ami_id}"
+            echo "- ${region}: ${copied_ami_id}" >> $GITHUB_STEP_SUMMARY
+
+            # Store with account IDs: region:ami_id:account1:account2...
+            if [ -z "$all_ami_ids" ]; then
+              all_ami_ids="${region}:${copied_ami_id}${account_ids}"
+            else
+              all_ami_ids="${all_ami_ids},${region}:${copied_ami_id}${account_ids}"
+            fi
+          done
+
+          echo "all_ami_ids=${all_ami_ids}" >> $GITHUB_OUTPUT
+
+      - name: Wait for AMI copies and share
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        run: |
+          ami_id=${{ steps.register_ami.outputs.ami_id }}
+          all_ami_ids="${{ steps.copy_ami.outputs.all_ami_ids }}"
+
+          # If no copies were made, just use the source AMI
+          if [ -z "$all_ami_ids" ]; then
+            all_ami_ids="us-west-2:${ami_id}"
+          fi
+
+          echo "Waiting for AMIs to become available and configuring permissions..."
+          echo "### AMI Sharing (x64)" >> $GITHUB_STEP_SUMMARY
+
+          IFS=',' read -ra AMI_ARRAY <<< "$all_ami_ids"
+          for entry in "${AMI_ARRAY[@]}"; do
+            # Parse region:ami_id:account1:account2...
+            IFS=':' read -ra PARTS <<< "$entry"
+            region="${PARTS[0]}"
+            ami="${PARTS[1]}"
+
+            # Extract account IDs (if any)
+            account_ids=()
+            for ((i=2; i<${#PARTS[@]}; i++)); do
+              account_ids+=("${PARTS[i]}")
+            done
+
+            echo "Waiting for ${ami} in ${region}..."
+
+            # Wait for AMI to be available (max 10 minutes)
+            for i in {1..30}; do
+              state=$(aws ec2 describe-images --image-ids "${ami}" --region "${region}" --query 'Images[0].State' --output text 2>/dev/null || echo "pending")
+              if [ "$state" = "available" ]; then
+                echo "AMI ${ami} is available in ${region}"
+                break
+              fi
+              echo "  State: ${state}, waiting..."
+              sleep 20
+            done
+
+            # Check if AMI became available
+            if [ "$state" != "available" ]; then
+              echo "ERROR: AMI ${ami} did not become available within 10 minutes in ${region}"
+              exit 1
+            fi
+
+            # Configure AMI permissions
+            if [ ${#account_ids[@]} -eq 0 ]; then
+              # No account IDs specified - make public
+              echo "Making ${ami} public in ${region}..."
+              aws ec2 modify-image-attribute \
+                --image-id "${ami}" \
+                --launch-permission "Add=[{Group=all}]" \
+                --region "${region}"
+              echo "- ${region}: ${ami} (public)" >> $GITHUB_STEP_SUMMARY
+            else
+              # Account IDs specified - share with specific accounts
+              echo "Sharing ${ami} in ${region} with accounts: ${account_ids[*]}..."
+
+              # Build launch permission list
+              permission_list=""
+              for account_id in "${account_ids[@]}"; do
+                if [ -z "$permission_list" ]; then
+                  permission_list="{UserId=${account_id}}"
+                else
+                  permission_list="${permission_list},{UserId=${account_id}}"
+                fi
+              done
+
+              aws ec2 modify-image-attribute \
+                --image-id "${ami}" \
+                --launch-permission "Add=[${permission_list}]" \
+                --region "${region}"
+              echo "- ${region}: ${ami} (shared with ${account_ids[*]})" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+      - name: Generate AMI IDs artifact
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        run: |
+          all_ami_ids="${{ steps.copy_ami.outputs.all_ami_ids }}"
+
+          # If no copies were made, use the source AMI
+          if [ -z "$all_ami_ids" ]; then
+            ami_id=${{ steps.register_ami.outputs.ami_id }}
+            all_ami_ids="us-west-2:${ami_id}"
+          fi
+
+          echo "ami_ids:" > ami-ids-x64.yaml
+          IFS=',' read -ra AMI_ARRAY <<< "$all_ami_ids"
+          for entry in "${AMI_ARRAY[@]}"; do
+            IFS=':' read -ra PARTS <<< "$entry"
+            region="${PARTS[0]}"
+            ami="${PARTS[1]}"
+            echo "  ${region}: ${ami}" >> ami-ids-x64.yaml
+          done
+
+          echo "Generated ami-ids-x64.yaml:"
+          cat ami-ids-x64.yaml
+
+      - name: Upload AMI IDs artifact
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ami-ids-ubuntu-${{ inputs.ubuntu_release }}-x64
+          path: ami-ids-x64.yaml
+
+      - name: Clean up S3
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        continue-on-error: true
+        run: |
+          echo "Cleaning up S3..."
+          aws s3 rm s3://${{ steps.s3_upload.outputs.s3_bucket }}/${{ steps.set_image_name.outputs.S3_BUCKET_IMAGE_PREFIX }}/${{ steps.s3_upload.outputs.image_filename }}
+
+      # === GCE Image Steps ===
+      - name: GCE post-processing
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        run: |
+          image_filename=${{ steps.set_image_name.outputs.MINIO_IMAGE_NAME }}.raw
+          cp "${image_filename}" postgres-x64-gce-work.raw
+          sudo ./gce-postprocess.sh postgres-x64-gce-work.raw
+          rm -f postgres-x64-gce-work.raw
+
+      - name: Set GCE image name
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        id: set_gce_image_name
+        run: |
+          # GCE image names allow only [a-z0-9-]; image_suffix may contain
+          # dots (e.g. "20260428.1.0"), so swap them for hyphens.
+          suffix="${{ inputs.image_suffix }}"
+          gce_image_name="postgres-ubuntu-${{ inputs.ubuntu_release }}-x64-${suffix//./-}"
+          echo "gce_image_name=${gce_image_name}" >> $GITHUB_OUTPUT
+          echo "GCE Image name: ${gce_image_name}"
+
+      - name: Rename GCE tar.gz and compute SHA256
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        run: |
+          gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
+          mv postgres-x64-gce-image.tar.gz "${gce_image_name}.tar.gz"
+          sha256sum "${gce_image_name}.tar.gz" > "${gce_image_name}.tar.gz.sha256"
+
+          echo "### GCE Image (x64)" >> $GITHUB_STEP_SUMMARY
+          du -h "${gce_image_name}.tar.gz" >> $GITHUB_STEP_SUMMARY
+          echo "### GCE SHA256" >> $GITHUB_STEP_SUMMARY
+          cat "${gce_image_name}.tar.gz.sha256" >> $GITHUB_STEP_SUMMARY
+
+      - name: Authenticate to GCP
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        id: gcp_auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Upload to GCS
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        run: |
+          gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
+          tar_file="${gce_image_name}.tar.gz"
+          bucket="${{ secrets.GCS_BUCKET }}"
+
+          echo "Uploading ${tar_file} to gs://${bucket}/..."
+          gcloud storage cp "${tar_file}" "gs://${bucket}/${tar_file}"
+
+          echo "### GCS Upload (x64)" >> $GITHUB_STEP_SUMMARY
+          echo "Uploaded to gs://${bucket}/${tar_file}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Create GCE image
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        id: create_gce_image
+        run: |
+          gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
+          tar_file="${gce_image_name}.tar.gz"
+          bucket="${{ secrets.GCS_BUCKET }}"
+          project="${{ steps.gcp_auth.outputs.project_id }}"
+          commit_sha="${{ github.sha }}"
+
+          echo "Creating GCE image: ${gce_image_name}"
+          gcloud compute images create "${gce_image_name}" \
+            --project="${project}" \
+            --source-uri="gs://${bucket}/${tar_file}" \
+            --guest-os-features=VIRTIO_SCSI_MULTIQUEUE,GVNIC \
+            --labels="source=postgres-vm-images,commit=${commit_sha:0:8},arch=x64"
+
+          echo "image_name=${gce_image_name}" >> $GITHUB_OUTPUT
+          echo "image_project=${project}" >> $GITHUB_OUTPUT
+
+          echo "### GCE Image Created (x64)" >> $GITHUB_STEP_SUMMARY
+          echo "- Name: ${gce_image_name}" >> $GITHUB_STEP_SUMMARY
+          echo "- Project: ${project}" >> $GITHUB_STEP_SUMMARY
+          echo "- Commit: ${commit_sha:0:8}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Make GCE image public
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        run: |
+          gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
+          project="${{ steps.gcp_auth.outputs.project_id }}"
+          gcloud compute images add-iam-policy-binding "${gce_image_name}" \
+            --project="${project}" \
+            --member="allAuthenticatedUsers" \
+            --role="roles/compute.imageUser"
+
+      - name: Verify GCE image
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        run: |
+          gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
+          project="${{ steps.gcp_auth.outputs.project_id }}"
+          gcloud compute images describe "${gce_image_name}" \
+            --project="${project}" \
+            --format="table(name,family,status,diskSizeGb,creationTimestamp)"
+
+      - name: Clean up GCS tar.gz
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        continue-on-error: true
+        run: |
+          gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
+          bucket="${{ secrets.GCS_BUCKET }}"
+          gcloud storage rm "gs://${bucket}/${gce_image_name}.tar.gz"
+
+  # arm64 build
+  build-arm64:
+    name: Build postgres-ubuntu-${{ inputs.ubuntu_release }}-arm64-${{ inputs.image_suffix }}
+    runs-on: ubicloud-standard-4-arm-ubuntu-2404
+    if: ${{ !inputs.test_pr_creation && (inputs.build_arm64 || (inputs.upload_aws_ami && !inputs.build_only)) }}
+    outputs:
+      sha256: ${{ steps.compute_sha.outputs.sha256 }}
+      all_ami_ids: ${{ steps.copy_ami.outputs.all_ami_ids }}
+      source_ami_id: ${{ steps.register_ami.outputs.ami_id }}
+      gce_image_name: ${{ steps.create_gce_image.outputs.image_name }}
+      gce_image_project: ${{ steps.create_gce_image.outputs.image_project }}
+    steps:
+      - name: Print inputs
+        run: |
+          echo "Inputs: ${{ toJSON(inputs) }}"
+          echo "Architecture: arm64"
+
+      - name: Check out code
+        uses: actions/checkout@v6
+
+      - name: Build image
+        run: sudo ./build.sh ${{ inputs.image_resize_gb }} ${{ inputs.run_apt_upgrade }} ${{ inputs.ubuntu_release }}
+
+      - name: Set image name output
+        id: set_image_name
+        run: |
+          base_image_name=postgres-ubuntu-${{ inputs.ubuntu_release }}-arm64-${{ inputs.image_suffix }}
+          if [ -n "${{ inputs.image_prefix }}" ]; then
+            image_name=${{ inputs.image_prefix }}-${base_image_name}
+          else
+            image_name=${base_image_name}
+          fi
+          echo "$image_name"
+          echo "IMAGE_NAME=$image_name" >> $GITHUB_OUTPUT
+          echo "S3_BUCKET_IMAGE_PREFIX=${{ github.run_number }}" >> $GITHUB_OUTPUT
+
+      - name: Rename image file and compute SHA256
+        id: compute_sha
+        run: |
+          image_filename=${{ steps.set_image_name.outputs.IMAGE_NAME }}.raw
+          sha_filename=${{ steps.set_image_name.outputs.IMAGE_NAME }}.raw.sha256
+          mv postgres-arm64-image.raw ${image_filename}
+          sha256sum ${image_filename} > ${sha_filename}
+          sha256=$(cut -d' ' -f1 ${sha_filename})
+          echo "sha256=${sha256}" >> $GITHUB_OUTPUT
+          echo "### Image (arm64)" >> $GITHUB_STEP_SUMMARY
+          du -h ${image_filename} >> $GITHUB_STEP_SUMMARY
+          echo "### Image SHA256" >> $GITHUB_STEP_SUMMARY
+          cat ${sha_filename} >> $GITHUB_STEP_SUMMARY
+
+      - name: Install AWS CLI
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        run: |
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o "awscliv2.zip"
+          unzip -q awscliv2.zip
+          sudo ./aws/install --update
+          aws --version
+
+      - name: Configure AWS credentials (role)
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only && inputs.use_aws_role }}
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: postgres-image-${{ job.name }}
+          aws-region: us-west-2
+
+      - name: Configure AWS credentials (access keys)
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only && !inputs.use_aws_role }}
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+
+      - name: Upload image to S3
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        id: s3_upload
+        run: |
+          image_filename=${{ steps.set_image_name.outputs.IMAGE_NAME }}.raw
+          s3_bucket=${{ secrets.AWS_S3_BUCKET }}
+
+          echo "Uploading image to S3..."
+          s3_prefix=${{ steps.set_image_name.outputs.S3_BUCKET_IMAGE_PREFIX }}
+
+          echo "Uploading image to S3..."
+          aws s3 cp ./${image_filename} s3://${s3_bucket}/${s3_prefix}/${image_filename}
+
+          echo "image_filename=${image_filename}" >> $GITHUB_OUTPUT
+          echo "s3_bucket=${s3_bucket}" >> $GITHUB_OUTPUT
+
+      - name: Import snapshot to AWS
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        id: import_snapshot
+        run: |
+          image_filename=${{ steps.s3_upload.outputs.image_filename }}
+          s3_bucket=${{ steps.s3_upload.outputs.s3_bucket }}
+          s3_prefix=${{ steps.set_image_name.outputs.S3_BUCKET_IMAGE_PREFIX }}
+          vm_import_role_name="${{ secrets.AWS_VM_IMPORT_ROLE_NAME || 'vmimport' }}"
+
+          cat <<EOT > containers.json
+          {
+            "Description": "${image_filename}",
+            "Format": "raw",
+            "UserBucket": {
+              "S3Bucket": "${s3_bucket}",
+              "S3Key": "${s3_prefix}/${image_filename}"
+            }
+          }
+          EOT
+
+          echo "Starting snapshot import..."
+
+          import_task_id=$(aws ec2 import-snapshot \
+            --role-name "${vm_import_role_name}" \
+            --description "${image_filename}" \
+            --disk-container file://containers.json \
+            --tag-specifications "ResourceType=import-snapshot-task,Tags=[{Key=Name,Value=${image_filename}},{Key=Source,Value=postgres-vm-images},{Key=Architecture,Value=arm64}]" \
+            --query ImportTaskId --output text)
+
+          echo "Import task ID: ${import_task_id}"
+          echo "import_task_id=${import_task_id}" >> $GITHUB_OUTPUT
+
+      - name: Wait for snapshot import completion
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        id: wait_snapshot
+        run: |
+          import_task_id=${{ steps.import_snapshot.outputs.import_task_id }}
+
+          while true; do
+            status=$(aws ec2 describe-import-snapshot-tasks \
+              --import-task-ids "${import_task_id}" \
+              --query "ImportSnapshotTasks[0].SnapshotTaskDetail.Status" \
+              --output text)
+            progress=$(aws ec2 describe-import-snapshot-tasks \
+              --import-task-ids "${import_task_id}" \
+              --query "ImportSnapshotTasks[0].SnapshotTaskDetail.Progress" \
+              --output text 2>/dev/null || echo "N/A")
+
+            echo "Status: ${status}, Progress: ${progress}%"
+
+            if [ "${status}" = "completed" ]; then
+              echo "Snapshot import completed successfully."
+              break
+            elif [ "${status}" = "cancelled" ] || [ "${status}" = "failed" ]; then
+              echo "Snapshot import failed!"
+              aws ec2 describe-import-snapshot-tasks --import-task-ids "${import_task_id}"
+              exit 1
+            fi
+
+            sleep 20
+          done
+
+          snapshot_id=$(aws ec2 describe-import-snapshot-tasks \
+            --import-task-ids "${import_task_id}" \
+            --query "ImportSnapshotTasks[0].SnapshotTaskDetail.SnapshotId" \
+            --output text)
+
+          echo "Snapshot ID: ${snapshot_id}"
+          echo "snapshot_id=${snapshot_id}" >> $GITHUB_OUTPUT
+
+          # Tag the snapshot
+          image_filename=${{ steps.s3_upload.outputs.image_filename }}
+          echo "Tagging snapshot ${snapshot_id}..."
+          aws ec2 create-tags \
+            --resources "${snapshot_id}" \
+            --tags "Key=Name,Value=${image_filename}" "Key=Source,Value=postgres-vm-images" "Key=Architecture,Value=arm64"
+
+      - name: Register AMI from snapshot
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        id: register_ami
+        run: |
+          ami_name=${{ steps.set_image_name.outputs.IMAGE_NAME }}
+          snapshot_id=${{ steps.wait_snapshot.outputs.snapshot_id }}
+
+          ami_id=$(aws ec2 register-image \
+            --name "${ami_name}" \
+            --architecture arm64 \
+            --virtualization-type hvm \
+            --boot-mode uefi-preferred \
+            --ena-support \
+            --root-device-name /dev/sda1 \
+            --block-device-mappings "[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"SnapshotId\":\"${snapshot_id}\",\"VolumeSize\":${{ inputs.image_resize_gb }}}}]" \
+            --tag-specifications "ResourceType=image,Tags=[{Key=Name,Value=${ami_name}},{Key=Source,Value=postgres-vm-images},{Key=Architecture,Value=arm64}]" \
+            --query "ImageId" \
+            --output text)
+
+          echo "Registered AMI: ${ami_id}"
+          echo "ami_id=${ami_id}" >> $GITHUB_OUTPUT
+
+          echo "### AWS AMI (arm64)" >> $GITHUB_STEP_SUMMARY
+          echo "AMI ID: ${ami_id}" >> $GITHUB_STEP_SUMMARY
+          echo "AMI Name: ${ami_name}" >> $GITHUB_STEP_SUMMARY
+          echo "Architecture: arm64" >> $GITHUB_STEP_SUMMARY
+          echo "Snapshot ID: ${snapshot_id}" >> $GITHUB_STEP_SUMMARY
+          echo "Region: us-west-2" >> $GITHUB_STEP_SUMMARY
+
+      - name: Copy AMI to additional regions
+        if: ${{ inputs.upload_aws_ami && inputs.aws_ami_regions != '' && !inputs.build_only }}
+        id: copy_ami
+        run: |
+          ami_id=${{ steps.register_ami.outputs.ami_id }}
+          ami_name=${{ steps.set_image_name.outputs.IMAGE_NAME }}
+          regions="${{ inputs.aws_ami_regions }}"
+
+          echo "Copying AMI ${ami_id} to additional regions: ${regions}"
+          echo "### AMI Copies (arm64)" >> $GITHUB_STEP_SUMMARY
+
+          # Store all AMI IDs and account IDs: region:ami_id:account1:account2...
+          all_ami_ids=""
+
+          IFS=',' read -ra REGION_ARRAY <<< "$regions"
+          for entry in "${REGION_ARRAY[@]}"; do
+            entry=$(echo "$entry" | xargs)
+
+            # Parse region:account1:account2:account3 format
+            IFS=':' read -ra PARTS <<< "$entry"
+            region="${PARTS[0]}"
+
+            # Extract account IDs for this region
+            account_ids=""
+            for ((i=1; i<${#PARTS[@]}; i++)); do
+              account_ids="${account_ids}:${PARTS[i]}"
+            done
+
+            copy_args=(
+              --source-region us-west-2
+              --source-image-id "${ami_id}"
+              --name "${ami_name}"
+              --tag-specifications "ResourceType=image,Tags=[{Key=Name,Value=${ami_name}},{Key=Source,Value=postgres-vm-images},{Key=Architecture,Value=arm64}]"
+              --region "${region}"
+            )
+
+            kms_key_id="${{ secrets.AWS_AMI_ENCRYPTION_KMS_KEY_ID }}"
+            if [ -n "${kms_key_id}" ]; then
+              copy_args+=(--encrypted --kms-key-id "${kms_key_id}")
+            fi
+
+            copied_ami_id=$(aws ec2 copy-image "${copy_args[@]}" --query "ImageId" --output text)
+
+            echo "Copied AMI to ${region}: ${copied_ami_id}"
+            echo "- ${region}: ${copied_ami_id}" >> $GITHUB_STEP_SUMMARY
+
+            # Store with account IDs: region:ami_id:account1:account2...
+            if [ -z "$all_ami_ids" ]; then
+              all_ami_ids="${region}:${copied_ami_id}${account_ids}"
+            else
+              all_ami_ids="${all_ami_ids},${region}:${copied_ami_id}${account_ids}"
+            fi
+          done
+
+          echo "all_ami_ids=${all_ami_ids}" >> $GITHUB_OUTPUT
+
+      - name: Wait for AMI copies and share
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        run: |
+          ami_id=${{ steps.register_ami.outputs.ami_id }}
+          all_ami_ids="${{ steps.copy_ami.outputs.all_ami_ids }}"
+
+          # If no copies were made, just use the source AMI
+          if [ -z "$all_ami_ids" ]; then
+            all_ami_ids="us-west-2:${ami_id}"
+          fi
+
+          echo "Waiting for AMIs to become available and configuring permissions..."
+          echo "### AMI Sharing (arm64)" >> $GITHUB_STEP_SUMMARY
+
+          IFS=',' read -ra AMI_ARRAY <<< "$all_ami_ids"
+          for entry in "${AMI_ARRAY[@]}"; do
+            # Parse region:ami_id:account1:account2...
+            IFS=':' read -ra PARTS <<< "$entry"
+            region="${PARTS[0]}"
+            ami="${PARTS[1]}"
+
+            # Extract account IDs (if any)
+            account_ids=()
+            for ((i=2; i<${#PARTS[@]}; i++)); do
+              account_ids+=("${PARTS[i]}")
+            done
+
+            echo "Waiting for ${ami} in ${region}..."
+
+            # Wait for AMI to be available (max 10 minutes)
+            for i in {1..30}; do
+              state=$(aws ec2 describe-images --image-ids "${ami}" --region "${region}" --query 'Images[0].State' --output text 2>/dev/null || echo "pending")
+              if [ "$state" = "available" ]; then
+                echo "AMI ${ami} is available in ${region}"
+                break
+              fi
+              echo "  State: ${state}, waiting..."
+              sleep 20
+            done
+
+            # Check if AMI became available
+            if [ "$state" != "available" ]; then
+              echo "ERROR: AMI ${ami} did not become available within 10 minutes in ${region}"
+              exit 1
+            fi
+
+            # Configure AMI permissions
+            if [ ${#account_ids[@]} -eq 0 ]; then
+              # No account IDs specified - make public
+              echo "Making ${ami} public in ${region}..."
+              aws ec2 modify-image-attribute \
+                --image-id "${ami}" \
+                --launch-permission "Add=[{Group=all}]" \
+                --region "${region}"
+              echo "- ${region}: ${ami} (public)" >> $GITHUB_STEP_SUMMARY
+            else
+              # Account IDs specified - share with specific accounts
+              echo "Sharing ${ami} in ${region} with accounts: ${account_ids[*]}..."
+
+              # Build launch permission list
+              permission_list=""
+              for account_id in "${account_ids[@]}"; do
+                if [ -z "$permission_list" ]; then
+                  permission_list="{UserId=${account_id}}"
+                else
+                  permission_list="${permission_list},{UserId=${account_id}}"
+                fi
+              done
+
+              aws ec2 modify-image-attribute \
+                --image-id "${ami}" \
+                --launch-permission "Add=[${permission_list}]" \
+                --region "${region}"
+              echo "- ${region}: ${ami} (shared with ${account_ids[*]})" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+      - name: Generate AMI IDs artifact
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        run: |
+          all_ami_ids="${{ steps.copy_ami.outputs.all_ami_ids }}"
+
+          # If no copies were made, use the source AMI
+          if [ -z "$all_ami_ids" ]; then
+            ami_id=${{ steps.register_ami.outputs.ami_id }}
+            all_ami_ids="us-west-2:${ami_id}"
+          fi
+
+          echo "ami_ids:" > ami-ids-arm64.yaml
+          IFS=',' read -ra AMI_ARRAY <<< "$all_ami_ids"
+          for entry in "${AMI_ARRAY[@]}"; do
+            IFS=':' read -ra PARTS <<< "$entry"
+            region="${PARTS[0]}"
+            ami="${PARTS[1]}"
+            echo "  ${region}: ${ami}" >> ami-ids-arm64.yaml
+          done
+
+          echo "Generated ami-ids-arm64.yaml:"
+          cat ami-ids-arm64.yaml
+
+      - name: Upload AMI IDs artifact
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ami-ids-ubuntu-${{ inputs.ubuntu_release }}-arm64
+          path: ami-ids-arm64.yaml
+
+      - name: Clean up S3
+        if: ${{ inputs.upload_aws_ami && !inputs.build_only }}
+        continue-on-error: true
+        run: |
+          echo "Cleaning up S3..."
+          aws s3 rm s3://${{ steps.s3_upload.outputs.s3_bucket }}/${{ steps.set_image_name.outputs.S3_BUCKET_IMAGE_PREFIX }}/${{ steps.s3_upload.outputs.image_filename }}
+
+      # === GCE Image Steps ===
+      - name: GCE post-processing
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        run: |
+          image_filename=${{ steps.set_image_name.outputs.IMAGE_NAME }}.raw
+          cp "${image_filename}" postgres-arm64-gce-work.raw
+          sudo ./gce-postprocess.sh postgres-arm64-gce-work.raw
+          rm -f postgres-arm64-gce-work.raw
+
+      - name: Set GCE image name
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        id: set_gce_image_name
+        run: |
+          # GCE image names allow only [a-z0-9-]; image_suffix may contain
+          # dots (e.g. "20260428.1.0"), so swap them for hyphens.
+          suffix="${{ inputs.image_suffix }}"
+          gce_image_name="postgres-ubuntu-${{ inputs.ubuntu_release }}-arm64-${suffix//./-}"
+          echo "gce_image_name=${gce_image_name}" >> $GITHUB_OUTPUT
+          echo "GCE Image name: ${gce_image_name}"
+
+      - name: Rename GCE tar.gz and compute SHA256
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        run: |
+          gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
+          mv postgres-arm64-gce-image.tar.gz "${gce_image_name}.tar.gz"
+          sha256sum "${gce_image_name}.tar.gz" > "${gce_image_name}.tar.gz.sha256"
+
+          echo "### GCE Image (arm64)" >> $GITHUB_STEP_SUMMARY
+          du -h "${gce_image_name}.tar.gz" >> $GITHUB_STEP_SUMMARY
+          echo "### GCE SHA256" >> $GITHUB_STEP_SUMMARY
+          cat "${gce_image_name}.tar.gz.sha256" >> $GITHUB_STEP_SUMMARY
+
+      - name: Authenticate to GCP
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        id: gcp_auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Upload to GCS
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        run: |
+          gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
+          tar_file="${gce_image_name}.tar.gz"
+          bucket="${{ secrets.GCS_BUCKET }}"
+
+          echo "Uploading ${tar_file} to gs://${bucket}/..."
+          gcloud storage cp "${tar_file}" "gs://${bucket}/${tar_file}"
+
+          echo "### GCS Upload (arm64)" >> $GITHUB_STEP_SUMMARY
+          echo "Uploaded to gs://${bucket}/${tar_file}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Create GCE image
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        id: create_gce_image
+        run: |
+          gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
+          tar_file="${gce_image_name}.tar.gz"
+          bucket="${{ secrets.GCS_BUCKET }}"
+          project="${{ steps.gcp_auth.outputs.project_id }}"
+          commit_sha="${{ github.sha }}"
+
+          echo "Creating GCE image: ${gce_image_name}"
+          gcloud compute images create "${gce_image_name}" \
+            --project="${project}" \
+            --source-uri="gs://${bucket}/${tar_file}" \
+            --guest-os-features=GVNIC,UEFI_COMPATIBLE \
+            --architecture=ARM64 \
+            --labels="source=postgres-vm-images,commit=${commit_sha:0:8},arch=arm64"
+
+          echo "image_name=${gce_image_name}" >> $GITHUB_OUTPUT
+          echo "image_project=${project}" >> $GITHUB_OUTPUT
+
+          echo "### GCE Image Created (arm64)" >> $GITHUB_STEP_SUMMARY
+          echo "- Name: ${gce_image_name}" >> $GITHUB_STEP_SUMMARY
+          echo "- Project: ${project}" >> $GITHUB_STEP_SUMMARY
+          echo "- Commit: ${commit_sha:0:8}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Make GCE image public
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        run: |
+          gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
+          project="${{ steps.gcp_auth.outputs.project_id }}"
+          gcloud compute images add-iam-policy-binding "${gce_image_name}" \
+            --project="${project}" \
+            --member="allAuthenticatedUsers" \
+            --role="roles/compute.imageUser"
+
+      - name: Verify GCE image
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        run: |
+          gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
+          project="${{ steps.gcp_auth.outputs.project_id }}"
+          gcloud compute images describe "${gce_image_name}" \
+            --project="${project}" \
+            --format="table(name,family,status,diskSizeGb,creationTimestamp)"
+
+      - name: Clean up GCS tar.gz
+        if: ${{ inputs.upload_gce && !inputs.build_only }}
+        continue-on-error: true
+        run: |
+          gce_image_name="${{ steps.set_gce_image_name.outputs.gce_image_name }}"
+          bucket="${{ secrets.GCS_BUCKET }}"
+          gcloud storage rm "gs://${bucket}/${gce_image_name}.tar.gz"
+
+  # Create PR to ubicloud/ubicloud with updated image versions
+  create-ubicloud-pr:
+    name: Create PR to ubicloud/ubicloud
+    runs-on: ubicloud-standard-2-ubuntu-2404
+    needs: [build-x64, build-arm64]
+    if: ${{ always() && (inputs.test_pr_creation || (inputs.create_ubicloud_pr && !inputs.build_only && needs.build-x64.result == 'success')) }}
+    steps:
+      - name: Collect build outputs
+        id: collect
+        run: |
+          # Image name for download_boot_image.rb.
+          # NOTE: the sed in this job replaces an existing version line, so
+          # the "postgres-ubuntu-<release>" block must already exist in
+          # ubicloud's prog/download_boot_image.rb BOOT_IMAGE_SHA256 before
+          # this job can update it.
+          image_name="postgres-ubuntu-${{ inputs.ubuntu_release }}"
+          echo "image_name=${image_name}" >> $GITHUB_OUTPUT
+          echo "version=${{ inputs.image_suffix }}" >> $GITHUB_OUTPUT
+
+          # Check if running in test mode
+          if [ "${{ inputs.test_pr_creation }}" = "true" ]; then
+            echo "🧪 TEST MODE: Using dummy values"
+            echo "x64_sha256=dummy_x64_sha256_for_testing_0123456789abcdef" >> $GITHUB_OUTPUT
+            echo "arm64_sha256=dummy_arm64_sha256_for_testing_fedcba9876543210" >> $GITHUB_OUTPUT
+            echo "x64_ami_ids=us-west-2:ami-test-x64-uswest2,us-east-1:ami-test-x64-useast1" >> $GITHUB_OUTPUT
+            echo "arm64_ami_ids=us-west-2:ami-test-arm64-uswest2,us-east-1:ami-test-arm64-useast1" >> $GITHUB_OUTPUT
+          else
+            # x64 data
+            echo "x64_sha256=${{ needs.build-x64.outputs.sha256 }}" >> $GITHUB_OUTPUT
+
+            # arm64 data (may be empty if arm64 job didn't run)
+            echo "arm64_sha256=${{ needs.build-arm64.outputs.sha256 }}" >> $GITHUB_OUTPUT
+
+            # AMI IDs
+            x64_amis="${{ needs.build-x64.outputs.all_ami_ids }}"
+            if [ -z "$x64_amis" ] && [ -n "${{ needs.build-x64.outputs.source_ami_id }}" ]; then
+              x64_amis="us-west-2:${{ needs.build-x64.outputs.source_ami_id }}"
+            fi
+            echo "x64_ami_ids=${x64_amis}" >> $GITHUB_OUTPUT
+
+            arm64_amis="${{ needs.build-arm64.outputs.all_ami_ids }}"
+            if [ -z "$arm64_amis" ] && [ -n "${{ needs.build-arm64.outputs.source_ami_id }}" ]; then
+              arm64_amis="us-west-2:${{ needs.build-arm64.outputs.source_ami_id }}"
+            fi
+            echo "arm64_ami_ids=${arm64_amis}" >> $GITHUB_OUTPUT
+
+            # GCE image names
+            echo "x64_gce_image_name=${{ needs.build-x64.outputs.gce_image_name }}" >> $GITHUB_OUTPUT
+            echo "arm64_gce_image_name=${{ needs.build-arm64.outputs.gce_image_name }}" >> $GITHUB_OUTPUT
+            echo "gce_image_project=${{ needs.build-x64.outputs.gce_image_project }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Clone ubicloud/ubicloud
+        run: |
+          git clone --depth 1 https://github.com/ubicloud/ubicloud.git ubicloud
+
+      - name: Update download_boot_image.rb
+        run: |
+          cd ubicloud
+          image_name="${{ steps.collect.outputs.image_name }}"
+          version="${{ steps.collect.outputs.version }}"
+          x64_sha="${{ steps.collect.outputs.x64_sha256 }}"
+          arm64_sha="${{ steps.collect.outputs.arm64_sha256 }}"
+
+          # BOOT_IMAGE_SHA256 uses a nested hash: "image" => { "arch" => { "version" => "sha" } }
+          # Replace the existing "version" => "sha" entry for each arch
+          if [ -n "$x64_sha" ]; then
+            # Find the x64 section under this image and replace the version => sha line
+            sed -i "/\"${image_name}\" => {/,/^    },/ { /\"x64\" => {/,/^      },/ s|\"[^\"]*\" => \"[^\"]*\",|\"${version}\" => \"${x64_sha}\",| ; }" prog/download_boot_image.rb
+            echo "Updated x64 entry: ${image_name} -> ${version}"
+          fi
+
+          if [ -n "$arm64_sha" ]; then
+            # Find the arm64 section under this image and replace the version => sha line
+            sed -i "/\"${image_name}\" => {/,/^    },/ { /\"arm64\" => {/,/^      },/ s|\"[^\"]*\" => \"[^\"]*\",|\"${version}\" => \"${arm64_sha}\",| ; }" prog/download_boot_image.rb
+            echo "Updated arm64 entry: ${image_name} -> ${version}"
+          fi
+
+          # Show the changes
+          echo "=== Updated entries ==="
+          grep -A 10 "\"${image_name}\"" prog/download_boot_image.rb || true
+
+      - name: Create migration file
+        run: |
+          cd ubicloud
+          release="${{ inputs.ubuntu_release }}"
+          family="ubuntu-${release}"
+
+          timestamp=$(date +%Y%m%d)
+          migration_file="migrate/${timestamp}_update_postgres_ubuntu_${release}_images.rb"
+
+          x64_amis="${{ steps.collect.outputs.x64_ami_ids }}"
+          arm64_amis="${{ steps.collect.outputs.arm64_ami_ids }}"
+          x64_gce_image="${{ steps.collect.outputs.x64_gce_image_name }}"
+          arm64_gce_image="${{ steps.collect.outputs.arm64_gce_image_name }}"
+
+          # Attribute a migration file to an image family. Generated update
+          # migrations carry an explicit `family = "ubuntu-XXXX"`; the register
+          # migration tags its rows with a bare "ubuntu-XXXX" literal; anything
+          # older predates families and is implicitly ubuntu-2204. This keeps
+          # the old-value scan from crossing families once several coexist.
+          file_family() {
+            local f="$1" fam
+            fam=$(grep -oE 'family = "ubuntu-[0-9]+"' "$f" 2>/dev/null | head -1 | grep -oE 'ubuntu-[0-9]+' || true)
+            if [ -n "$fam" ]; then echo "$fam"; return; fi
+            fam=$(grep -oE '"ubuntu-[0-9]+"' "$f" 2>/dev/null | head -1 | tr -d '"' || true)
+            if [ -n "$fam" ]; then echo "$fam"; return; fi
+            echo "ubuntu-2204"
+          }
+
+          # Current AMIs for this family, keyed by region:arch (last migration wins).
+          declare -A old_amis
+          echo "=== Scanning ${family} AMIs in migration files ==="
+          for migration in $(ls -1 migrate/*.rb 2>/dev/null | sort); do
+            [ "$(file_family "$migration")" = "$family" ] || continue
+            # generated update form: ["region", "arch", "new-ami", "old-ami"] -> new is current
+            while IFS= read -r match; do
+              region=$(echo "$match" | sed -E 's/^\["([^"]+)".*/\1/')
+              arch=$(echo "$match" | sed -E 's/.*",[[:space:]]*"(x64|arm64)".*/\1/')
+              ami=$(echo "$match" | grep -oE 'ami-[0-9a-f]+' | head -1)
+              [ -n "$ami" ] && old_amis["${region}:${arch}"]="$ami"
+            done < <(grep -oE '\["[^"]+",[[:space:]]*"(x64|arm64)",[[:space:]]*"ami-[^"]+"' "$migration" 2>/dev/null || true)
+            # register/import form: ["region", "arch"] => "ami-..." -> current
+            while IFS= read -r match; do
+              region=$(echo "$match" | sed -E 's/^\["([^"]+)".*/\1/')
+              arch=$(echo "$match" | sed -E 's/.*",[[:space:]]*"(x64|arm64)".*/\1/')
+              ami=$(echo "$match" | grep -oE 'ami-[0-9a-f]+' | head -1)
+              [ -n "$ami" ] && old_amis["${region}:${arch}"]="$ami"
+            done < <(grep -oE '\["[^"]+",[[:space:]]*"(x64|arm64)"\][[:space:]]*=>[[:space:]]*"ami-[^"]+"' "$migration" 2>/dev/null || true)
+          done
+          echo "Found ${#old_amis[@]} current ${family} AMI entries"
+
+          # Current GCE image names for this family, per arch (last migration wins).
+          old_x64_gce=""
+          old_arm64_gce=""
+          for migration in $(ls -1 migrate/*.rb 2>/dev/null | sort); do
+            [ "$(file_family "$migration")" = "$family" ] || continue
+            for arch in x64 arm64; do
+              # generated update form: ["arch", "postgres-ubuntu-<rel>-<arch>-...new", ...]
+              name=$(grep -oE "\[\"${arch}\",[[:space:]]*\"postgres-ubuntu-${release}-${arch}-[0-9][0-9-]*[0-9]\"" "$migration" 2>/dev/null | head -1 | grep -oE "postgres-ubuntu-${release}-${arch}-[0-9][0-9-]*[0-9]" | head -1 || true)
+              # register/import form: ["postgres-ubuntu-<rel>-<arch>-...", "arch", ...]
+              if [ -z "$name" ]; then
+                name=$(grep -oE "\[\"postgres-ubuntu-${release}-${arch}-[0-9][0-9-]*[0-9]\",[[:space:]]*\"${arch}\"" "$migration" 2>/dev/null | head -1 | grep -oE "postgres-ubuntu-${release}-${arch}-[0-9][0-9-]*[0-9]" | head -1 || true)
+              fi
+              if [ -n "$name" ]; then
+                [ "$arch" = "x64" ] && old_x64_gce="$name"
+                [ "$arch" = "arm64" ] && old_arm64_gce="$name"
+              fi
+            done
+          done
+          echo "Current ${family} GCE images: x64=${old_x64_gce:-none} arm64=${old_arm64_gce:-none}"
+
+          # AMI entries: [region, arch, new, old]
+          entries=()
+          add_ami_entries() {
+            local list="$1" arch="$2" entry region new_ami old_ami
+            [ -n "$list" ] || return 0
+            IFS=',' read -ra AMI_ARRAY <<< "$list"
+            for entry in "${AMI_ARRAY[@]}"; do
+              region=$(echo "$entry" | cut -d: -f1)
+              new_ami=$(echo "$entry" | cut -d: -f2)
+              old_ami="${old_amis["${region}:${arch}"]:-}"
+              entries+=("    [\"${region}\", \"${arch}\", \"${new_ami}\", \"${old_ami}\"]")
+            done
+          }
+          add_ami_entries "$x64_amis" "x64"
+          add_ami_entries "$arm64_amis" "arm64"
+
+          # GCE entries: [arch, new, old], guarded against junk old values.
+          gce_entries=()
+          add_gce_entry() {
+            local arch="$1" new_name="$2" old_name="$3"
+            [ -n "$new_name" ] || return 0
+            if [ -z "$old_name" ]; then
+              echo "ERROR: no previous ${family} GCE image name found for ${arch}; refusing to emit an irreversible migration." >&2
+              exit 1
+            fi
+            if [ "$new_name" = "$old_name" ]; then
+              echo "ERROR: new ${arch} GCE image name equals the current one (${new_name}); already-merged release respin." >&2
+              exit 1
+            fi
+            gce_entries+=("    [\"${arch}\", \"${new_name}\", \"${old_name}\"]")
+          }
+          add_gce_entry "x64" "$x64_gce_image" "$old_x64_gce"
+          add_gce_entry "arm64" "$arm64_gce_image" "$old_arm64_gce"
+
+          # Build the migration file. Every UPDATE is scoped by family so a bump
+          # to one image family never rewrites another family's rows, and each
+          # UPDATE asserts its affected row count to catch a silent no-op.
+          cat > "${migration_file}" << 'MIGRATION_HEADER'
+          # frozen_string_literal: true
+
+          # generated-by: update-postgres-images
+
+          Sequel.migration do
+          MIGRATION_HEADER
+          echo "  family = \"${family}\"" >> "${migration_file}"
+          echo "" >> "${migration_file}"
+
+          if [ ${#entries[@]} -eq 0 ]; then
+            echo "  ami_ids = []" >> "${migration_file}"
+          else
+            echo "  ami_ids = [" >> "${migration_file}"
+            for entry in "${entries[@]}"; do
+              echo "${entry}," >> "${migration_file}"
+            done
+            echo "  ]" >> "${migration_file}"
+          fi
+
+          if [ ${#gce_entries[@]} -eq 0 ]; then
+            echo "  gce_images = []" >> "${migration_file}"
+          else
+            echo "  gce_images = [" >> "${migration_file}"
+            for entry in "${gce_entries[@]}"; do
+              echo "${entry}," >> "${migration_file}"
+            done
+            echo "  ]" >> "${migration_file}"
+          fi
+
+          cat >> "${migration_file}" << 'MIGRATION_FOOTER'
+
+            up do
+              ami_ids.each do |location_name, arch, new_ami, old_ami|
+                next if old_ami.empty?
+                count = from(:pg_aws_ami)
+                  .where(aws_location_name: location_name, arch:, family:, aws_ami_id: old_ami)
+                  .update(aws_ami_id: new_ami)
+                raise Sequel::Error, "pg_aws_ami: no #{family} row for #{location_name}/#{arch} at #{old_ami}" if count.zero?
+              end
+
+              gce_images.each do |arch, new_name, old_name|
+                count = from(:pg_gce_image)
+                  .where(arch:, family:, gce_image_name: old_name)
+                  .update(gce_image_name: new_name)
+                raise Sequel::Error, "pg_gce_image: expected 1 #{family} row for #{arch} at #{old_name}, updated #{count}" unless count == 1
+              end
+            end
+
+            down do
+              ami_ids.each do |location_name, arch, new_ami, old_ami|
+                next if old_ami.empty?
+                count = from(:pg_aws_ami)
+                  .where(aws_location_name: location_name, arch:, family:, aws_ami_id: new_ami)
+                  .update(aws_ami_id: old_ami)
+                raise Sequel::Error, "pg_aws_ami: no #{family} row for #{location_name}/#{arch} at #{new_ami}" if count.zero?
+              end
+
+              gce_images.each do |arch, new_name, old_name|
+                count = from(:pg_gce_image)
+                  .where(arch:, family:, gce_image_name: new_name)
+                  .update(gce_image_name: old_name)
+                raise Sequel::Error, "pg_gce_image: expected 1 #{family} row for #{arch} at #{new_name}, updated #{count}" unless count == 1
+              end
+            end
+          end
+          MIGRATION_FOOTER
+
+          echo "Created migration file: ${migration_file}"
+          cat "${migration_file}"
+
+      - name: Create Pull Request
+        env:
+          GH_TOKEN: ${{ secrets.UBICLOUD_REPO_PAT }}
+        run: |
+          cd ubicloud
+
+          # Configure git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Configure git to use the PAT for authentication
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/ubicloud/ubicloud.git"
+
+          image_name="${{ steps.collect.outputs.image_name }}"
+          version="${{ inputs.image_suffix }}"
+          branch_name="update-${image_name}-images-${version}"
+          title="Update ${image_name} images to ${version}"
+
+          # Check if PR already exists for this branch
+          existing_pr=$(gh pr list --repo ubicloud/ubicloud --head "${branch_name}" --json number -q '.[0].number')
+          if [ -n "$existing_pr" ]; then
+            echo "PR #${existing_pr} already exists for branch ${branch_name}"
+            echo "### Existing PR" >> $GITHUB_STEP_SUMMARY
+            gh pr view --repo ubicloud/ubicloud "${existing_pr}" --json url -q '.url' >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          # Delete remote branch if it exists (from failed previous run)
+          git push origin --delete "${branch_name}" 2>/dev/null || true
+
+          # Create branch and commit
+          git checkout -b "${branch_name}"
+          git add -A
+          git commit -m "${title}"
+
+          # Push branch
+          git push -u origin "${branch_name}"
+
+          # Create PR
+          gh pr create \
+            --repo ubicloud/ubicloud \
+            --head "${branch_name}" \
+            --title "${title}" \
+            --body "## Summary
+          - Updates the \`${image_name}\` boot image version and SHA256 hashes in \`prog/download_boot_image.rb\`
+          - Adds a single migration updating \`ubuntu-${{ inputs.ubuntu_release }}\` AWS AMI IDs in \`pg_aws_ami\` and GCE image names in \`pg_gce_image\`
+
+          ## Image Family
+          \`ubuntu-${{ inputs.ubuntu_release }}\`
+
+          ## Image Version
+          \`${version}\`
+
+          ## Changes
+          - x64 SHA256: \`${{ steps.collect.outputs.x64_sha256 }}\`
+          - arm64 SHA256: \`${{ steps.collect.outputs.arm64_sha256 }}\`
+          - GCE x64: \`${{ steps.collect.outputs.x64_gce_image_name }}\`
+          - GCE arm64: \`${{ steps.collect.outputs.arm64_gce_image_name }}\`
+
+          🤖 Generated by [postgres-vm-images](https://github.com/ubicloud/postgres-vm-images) workflow"
+
+          echo "### PR Created" >> $GITHUB_STEP_SUMMARY
+          gh pr view --repo ubicloud/ubicloud "${branch_name}" --json url -q '.url' >> $GITHUB_STEP_SUMMARY
