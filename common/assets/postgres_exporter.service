@@ -17,7 +17,8 @@ ExecStart=/usr/bin/postgres_exporter \
     --no-collector.database \
     --no-collector.stat_user_tables \
     --no-collector.statio_user_tables \
-    --extend.query-path=/usr/local/share/postgresql/postgres_exporter_queries.yaml
+    --extend.query-path=/usr/local/share/postgresql/postgres_exporter_queries.yaml \
+    --web.listen-address=127.0.0.1:9187
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 

@@ -14,7 +14,8 @@ ExecStart=/usr/bin/prometheus \
     --storage.tsdb.path=/home/prometheus/data \
     --web.console.templates=/home/prometheus/consoles \
     --web.console.libraries=/home/prometheus/console_libraries \
-    --storage.tsdb.retention.size=1GB
+    --storage.tsdb.retention.size=1GB \
+    --web.listen-address=127.0.0.1:9090
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 
