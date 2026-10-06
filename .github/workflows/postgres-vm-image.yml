@@ -1163,11 +1163,11 @@ jobs:
       - name: Create migration file
         run: |
           cd ubicloud
-          timestamp=$(date +%Y%m%d)
-          migration_file="migrate/${timestamp}_update_postgres_images.rb"
-
           release="${{ inputs.ubuntu_release }}"
           family="ubuntu-${release}"
+
+          timestamp=$(date +%Y%m%d)
+          migration_file="migrate/${timestamp}_update_postgres_ubuntu_${release}_images.rb"
 
           x64_amis="${{ steps.collect.outputs.x64_ami_ids }}"
           arm64_amis="${{ steps.collect.outputs.arm64_ami_ids }}"
@@ -1351,7 +1351,10 @@ jobs:
           # Configure git to use the PAT for authentication
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/ubicloud/ubicloud.git"
 
-          branch_name="update-postgres-images-${{ inputs.image_suffix }}"
+          image_name="${{ steps.collect.outputs.image_name }}"
+          version="${{ inputs.image_suffix }}"
+          branch_name="update-${image_name}-images-${version}"
+          title="Update ${image_name} images to ${version}"
 
           # Check if PR already exists for this branch
           existing_pr=$(gh pr list --repo ubicloud/ubicloud --head "${branch_name}" --json number -q '.[0].number' 2>/dev/null || echo "")
@@ -1368,7 +1371,7 @@ jobs:
           # Create branch and commit
           git checkout -b "${branch_name}"
           git add -A
-          git commit -m "Update postgres images to ${{ inputs.image_suffix }}"
+          git commit -m "${title}"
 
           # Push branch
           git push -u origin "${branch_name}"
@@ -1377,13 +1380,16 @@ jobs:
           gh pr create \
             --repo ubicloud/ubicloud \
             --head "${branch_name}" \
-            --title "Update postgres images to ${{ inputs.image_suffix }}" \
+            --title "${title}" \
             --body "## Summary
-          - Updates boot image version and SHA256 hashes in \`prog/download_boot_image.rb\`
-          - Adds a single migration updating AWS AMI IDs in \`pg_aws_ami\` and GCE image names in \`pg_gce_image\`
+          - Updates the \`${image_name}\` boot image version and SHA256 hashes in \`prog/download_boot_image.rb\`
+          - Adds a single migration updating \`ubuntu-${{ inputs.ubuntu_release }}\` AWS AMI IDs in \`pg_aws_ami\` and GCE image names in \`pg_gce_image\`
+
+          ## Image Family
+          \`ubuntu-${{ inputs.ubuntu_release }}\`
 
           ## Image Version
-          \`${{ inputs.image_suffix }}\`
+          \`${version}\`
 
           ## Changes
           - x64 SHA256: \`${{ steps.collect.outputs.x64_sha256 }}\`
