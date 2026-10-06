@@ -85,7 +85,7 @@ jobs:
     with:
       image_prefix: ${{ inputs.image_prefix }}
       image_suffix: ${{ inputs.image_suffix }}
-      image_resize_gb: ${{ inputs.image_resize_gb }}
+      image_resize_gb: ${{ fromJSON(inputs.image_resize_gb) }}
       ubuntu_release: ${{ matrix.ubuntu_release }}
       build_only: ${{ inputs.build_only }}
       build_arm64: ${{ inputs.build_arm64 }}
