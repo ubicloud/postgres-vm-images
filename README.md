@@ -19,10 +19,10 @@ sudo ./build.sh 12 true 2604
 
 Images are built on **Ubuntu 26.04 LTS (resolute)** by default. The release is
 parameterized (`ubuntu_release` build argument; `ubuntu_2604` / `ubuntu_2204`
-workflow checkboxes, one ubicloud PR per release); `2204` (jammy) remains
-selectable for rebuilding the previous image family during the migration
-window. Adding a new release requires extending the release cases in `build.sh`
-and `common/setup_base.sh` (per-release library package names).
+workflow checkboxes, one ubicloud PR covering every selected release); `2204`
+(jammy) remains selectable for rebuilding the previous image family during the
+migration window. Adding a new release requires extending the release cases in
+`build.sh` and `common/setup_base.sh` (per-release library package names).
 
 On 25.10+ releases the build pins **GNU coreutils and classic sudo** in place
 of the uutils/sudo-rs defaults, since the control plane drives PostgreSQL

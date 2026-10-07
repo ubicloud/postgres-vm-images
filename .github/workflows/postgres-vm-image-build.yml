@@ -1046,326 +1046,55 @@ jobs:
           bucket="${{ secrets.GCS_BUCKET }}"
           gcloud storage rm "gs://${bucket}/${gce_image_name}.tar.gz"
 
-  # Create PR to ubicloud/ubicloud with updated image versions
-  create-ubicloud-pr:
-    name: Create PR to ubicloud/ubicloud
+  # Hand this release's build outputs to the create-ubicloud-pr job in
+  # postgres-vm-image.yml, which opens one PR for all selected releases.
+  collect-outputs:
+    name: Collect build outputs
     runs-on: ubicloud-standard-2-ubuntu-2404
     needs: [build-x64, build-arm64]
-    if: ${{ always() && (inputs.test_pr_creation || (inputs.create_ubicloud_pr && !inputs.build_only && needs.build-x64.result == 'success')) }}
+    if: ${{ !cancelled() && !failure() && (inputs.test_pr_creation || (inputs.create_ubicloud_pr && !inputs.build_only)) }}
     steps:
       - name: Collect build outputs
-        id: collect
         run: |
-          # Image name for download_boot_image.rb.
-          # NOTE: the sed in this job replaces an existing version line, so
-          # the "postgres-ubuntu-<release>" block must already exist in
-          # ubicloud's prog/download_boot_image.rb BOOT_IMAGE_SHA256 before
-          # this job can update it.
-          image_name="postgres-ubuntu-${{ inputs.ubuntu_release }}"
-          echo "image_name=${image_name}" >> $GITHUB_OUTPUT
-          echo "version=${{ inputs.image_suffix }}" >> $GITHUB_OUTPUT
+          out="build-outputs-ubuntu-${{ inputs.ubuntu_release }}.env"
+          : > "$out"
 
           # Check if running in test mode
           if [ "${{ inputs.test_pr_creation }}" = "true" ]; then
             echo "🧪 TEST MODE: Using dummy values"
-            echo "x64_sha256=dummy_x64_sha256_for_testing_0123456789abcdef" >> $GITHUB_OUTPUT
-            echo "arm64_sha256=dummy_arm64_sha256_for_testing_fedcba9876543210" >> $GITHUB_OUTPUT
-            echo "x64_ami_ids=us-west-2:ami-test-x64-uswest2,us-east-1:ami-test-x64-useast1" >> $GITHUB_OUTPUT
-            echo "arm64_ami_ids=us-west-2:ami-test-arm64-uswest2,us-east-1:ami-test-arm64-useast1" >> $GITHUB_OUTPUT
+            echo "x64_sha256=dummy_x64_sha256_for_testing_0123456789abcdef" >> "$out"
+            echo "arm64_sha256=dummy_arm64_sha256_for_testing_fedcba9876543210" >> "$out"
+            echo "x64_ami_ids=us-west-2:ami-test-x64-uswest2,us-east-1:ami-test-x64-useast1" >> "$out"
+            echo "arm64_ami_ids=us-west-2:ami-test-arm64-uswest2,us-east-1:ami-test-arm64-useast1" >> "$out"
           else
             # x64 data
-            echo "x64_sha256=${{ needs.build-x64.outputs.sha256 }}" >> $GITHUB_OUTPUT
+            echo "x64_sha256=${{ needs.build-x64.outputs.sha256 }}" >> "$out"
 
             # arm64 data (may be empty if arm64 job didn't run)
-            echo "arm64_sha256=${{ needs.build-arm64.outputs.sha256 }}" >> $GITHUB_OUTPUT
+            echo "arm64_sha256=${{ needs.build-arm64.outputs.sha256 }}" >> "$out"
 
             # AMI IDs
             x64_amis="${{ needs.build-x64.outputs.all_ami_ids }}"
             if [ -z "$x64_amis" ] && [ -n "${{ needs.build-x64.outputs.source_ami_id }}" ]; then
               x64_amis="us-west-2:${{ needs.build-x64.outputs.source_ami_id }}"
             fi
-            echo "x64_ami_ids=${x64_amis}" >> $GITHUB_OUTPUT
+            echo "x64_ami_ids=${x64_amis}" >> "$out"
 
             arm64_amis="${{ needs.build-arm64.outputs.all_ami_ids }}"
             if [ -z "$arm64_amis" ] && [ -n "${{ needs.build-arm64.outputs.source_ami_id }}" ]; then
               arm64_amis="us-west-2:${{ needs.build-arm64.outputs.source_ami_id }}"
             fi
-            echo "arm64_ami_ids=${arm64_amis}" >> $GITHUB_OUTPUT
+            echo "arm64_ami_ids=${arm64_amis}" >> "$out"
 
             # GCE image names
-            echo "x64_gce_image_name=${{ needs.build-x64.outputs.gce_image_name }}" >> $GITHUB_OUTPUT
-            echo "arm64_gce_image_name=${{ needs.build-arm64.outputs.gce_image_name }}" >> $GITHUB_OUTPUT
-            echo "gce_image_project=${{ needs.build-x64.outputs.gce_image_project }}" >> $GITHUB_OUTPUT
+            echo "x64_gce_image_name=${{ needs.build-x64.outputs.gce_image_name }}" >> "$out"
+            echo "arm64_gce_image_name=${{ needs.build-arm64.outputs.gce_image_name }}" >> "$out"
           fi
+          cat "$out"
 
-      - name: Clone ubicloud/ubicloud
-        run: |
-          git clone --depth 1 https://github.com/ubicloud/ubicloud.git ubicloud
-
-      - name: Update download_boot_image.rb
-        run: |
-          cd ubicloud
-          image_name="${{ steps.collect.outputs.image_name }}"
-          version="${{ steps.collect.outputs.version }}"
-          x64_sha="${{ steps.collect.outputs.x64_sha256 }}"
-          arm64_sha="${{ steps.collect.outputs.arm64_sha256 }}"
-
-          # BOOT_IMAGE_SHA256 uses a nested hash: "image" => { "arch" => { "version" => "sha" } }
-          # Replace the existing "version" => "sha" entry for each arch
-          if [ -n "$x64_sha" ]; then
-            # Find the x64 section under this image and replace the version => sha line
-            sed -i "/\"${image_name}\" => {/,/^    },/ { /\"x64\" => {/,/^      },/ s|\"[^\"]*\" => \"[^\"]*\",|\"${version}\" => \"${x64_sha}\",| ; }" prog/download_boot_image.rb
-            echo "Updated x64 entry: ${image_name} -> ${version}"
-          fi
-
-          if [ -n "$arm64_sha" ]; then
-            # Find the arm64 section under this image and replace the version => sha line
-            sed -i "/\"${image_name}\" => {/,/^    },/ { /\"arm64\" => {/,/^      },/ s|\"[^\"]*\" => \"[^\"]*\",|\"${version}\" => \"${arm64_sha}\",| ; }" prog/download_boot_image.rb
-            echo "Updated arm64 entry: ${image_name} -> ${version}"
-          fi
-
-          # Show the changes
-          echo "=== Updated entries ==="
-          grep -A 10 "\"${image_name}\"" prog/download_boot_image.rb || true
-
-      - name: Create migration file
-        run: |
-          cd ubicloud
-          release="${{ inputs.ubuntu_release }}"
-          family="ubuntu-${release}"
-
-          timestamp=$(date +%Y%m%d)
-          migration_file="migrate/${timestamp}_update_postgres_ubuntu_${release}_images.rb"
-
-          x64_amis="${{ steps.collect.outputs.x64_ami_ids }}"
-          arm64_amis="${{ steps.collect.outputs.arm64_ami_ids }}"
-          x64_gce_image="${{ steps.collect.outputs.x64_gce_image_name }}"
-          arm64_gce_image="${{ steps.collect.outputs.arm64_gce_image_name }}"
-
-          # Attribute a migration file to an image family. Generated update
-          # migrations carry an explicit `family = "ubuntu-XXXX"`; the register
-          # migration tags its rows with a bare "ubuntu-XXXX" literal; anything
-          # older predates families and is implicitly ubuntu-2204. This keeps
-          # the old-value scan from crossing families once several coexist.
-          file_family() {
-            local f="$1" fam
-            fam=$(grep -oE 'family = "ubuntu-[0-9]+"' "$f" 2>/dev/null | head -1 | grep -oE 'ubuntu-[0-9]+' || true)
-            if [ -n "$fam" ]; then echo "$fam"; return; fi
-            fam=$(grep -oE '"ubuntu-[0-9]+"' "$f" 2>/dev/null | head -1 | tr -d '"' || true)
-            if [ -n "$fam" ]; then echo "$fam"; return; fi
-            echo "ubuntu-2204"
-          }
-
-          # Current AMIs for this family, keyed by region:arch (last migration wins).
-          declare -A old_amis
-          echo "=== Scanning ${family} AMIs in migration files ==="
-          for migration in $(ls -1 migrate/*.rb 2>/dev/null | sort); do
-            [ "$(file_family "$migration")" = "$family" ] || continue
-            # generated update form: ["region", "arch", "new-ami", "old-ami"] -> new is current
-            while IFS= read -r match; do
-              region=$(echo "$match" | sed -E 's/^\["([^"]+)".*/\1/')
-              arch=$(echo "$match" | sed -E 's/.*",[[:space:]]*"(x64|arm64)".*/\1/')
-              ami=$(echo "$match" | grep -oE 'ami-[0-9a-f]+' | head -1)
-              [ -n "$ami" ] && old_amis["${region}:${arch}"]="$ami"
-            done < <(grep -oE '\["[^"]+",[[:space:]]*"(x64|arm64)",[[:space:]]*"ami-[^"]+"' "$migration" 2>/dev/null || true)
-            # register/import form: ["region", "arch"] => "ami-..." -> current
-            while IFS= read -r match; do
-              region=$(echo "$match" | sed -E 's/^\["([^"]+)".*/\1/')
-              arch=$(echo "$match" | sed -E 's/.*",[[:space:]]*"(x64|arm64)".*/\1/')
-              ami=$(echo "$match" | grep -oE 'ami-[0-9a-f]+' | head -1)
-              [ -n "$ami" ] && old_amis["${region}:${arch}"]="$ami"
-            done < <(grep -oE '\["[^"]+",[[:space:]]*"(x64|arm64)"\][[:space:]]*=>[[:space:]]*"ami-[^"]+"' "$migration" 2>/dev/null || true)
-          done
-          echo "Found ${#old_amis[@]} current ${family} AMI entries"
-
-          # Current GCE image names for this family, per arch (last migration wins).
-          old_x64_gce=""
-          old_arm64_gce=""
-          for migration in $(ls -1 migrate/*.rb 2>/dev/null | sort); do
-            [ "$(file_family "$migration")" = "$family" ] || continue
-            for arch in x64 arm64; do
-              # generated update form: ["arch", "postgres-ubuntu-<rel>-<arch>-...new", ...]
-              name=$(grep -oE "\[\"${arch}\",[[:space:]]*\"postgres-ubuntu-${release}-${arch}-[0-9][0-9-]*[0-9]\"" "$migration" 2>/dev/null | head -1 | grep -oE "postgres-ubuntu-${release}-${arch}-[0-9][0-9-]*[0-9]" | head -1 || true)
-              # register/import form: ["postgres-ubuntu-<rel>-<arch>-...", "arch", ...]
-              if [ -z "$name" ]; then
-                name=$(grep -oE "\[\"postgres-ubuntu-${release}-${arch}-[0-9][0-9-]*[0-9]\",[[:space:]]*\"${arch}\"" "$migration" 2>/dev/null | head -1 | grep -oE "postgres-ubuntu-${release}-${arch}-[0-9][0-9-]*[0-9]" | head -1 || true)
-              fi
-              if [ -n "$name" ]; then
-                [ "$arch" = "x64" ] && old_x64_gce="$name"
-                [ "$arch" = "arm64" ] && old_arm64_gce="$name"
-              fi
-            done
-          done
-          echo "Current ${family} GCE images: x64=${old_x64_gce:-none} arm64=${old_arm64_gce:-none}"
-
-          # AMI entries: [region, arch, new, old]
-          entries=()
-          add_ami_entries() {
-            local list="$1" arch="$2" entry region new_ami old_ami
-            [ -n "$list" ] || return 0
-            IFS=',' read -ra AMI_ARRAY <<< "$list"
-            for entry in "${AMI_ARRAY[@]}"; do
-              region=$(echo "$entry" | cut -d: -f1)
-              new_ami=$(echo "$entry" | cut -d: -f2)
-              old_ami="${old_amis["${region}:${arch}"]:-}"
-              entries+=("    [\"${region}\", \"${arch}\", \"${new_ami}\", \"${old_ami}\"]")
-            done
-          }
-          add_ami_entries "$x64_amis" "x64"
-          add_ami_entries "$arm64_amis" "arm64"
-
-          # GCE entries: [arch, new, old], guarded against junk old values.
-          gce_entries=()
-          add_gce_entry() {
-            local arch="$1" new_name="$2" old_name="$3"
-            [ -n "$new_name" ] || return 0
-            if [ -z "$old_name" ]; then
-              echo "ERROR: no previous ${family} GCE image name found for ${arch}; refusing to emit an irreversible migration." >&2
-              exit 1
-            fi
-            if [ "$new_name" = "$old_name" ]; then
-              echo "ERROR: new ${arch} GCE image name equals the current one (${new_name}); already-merged release respin." >&2
-              exit 1
-            fi
-            gce_entries+=("    [\"${arch}\", \"${new_name}\", \"${old_name}\"]")
-          }
-          add_gce_entry "x64" "$x64_gce_image" "$old_x64_gce"
-          add_gce_entry "arm64" "$arm64_gce_image" "$old_arm64_gce"
-
-          # Build the migration file. Every UPDATE is scoped by family so a bump
-          # to one image family never rewrites another family's rows, and each
-          # UPDATE asserts its affected row count to catch a silent no-op.
-          cat > "${migration_file}" << 'MIGRATION_HEADER'
-          # frozen_string_literal: true
-
-          # generated-by: update-postgres-images
-
-          Sequel.migration do
-          MIGRATION_HEADER
-          echo "  family = \"${family}\"" >> "${migration_file}"
-          echo "" >> "${migration_file}"
-
-          if [ ${#entries[@]} -eq 0 ]; then
-            echo "  ami_ids = []" >> "${migration_file}"
-          else
-            echo "  ami_ids = [" >> "${migration_file}"
-            for entry in "${entries[@]}"; do
-              echo "${entry}," >> "${migration_file}"
-            done
-            echo "  ]" >> "${migration_file}"
-          fi
-
-          if [ ${#gce_entries[@]} -eq 0 ]; then
-            echo "  gce_images = []" >> "${migration_file}"
-          else
-            echo "  gce_images = [" >> "${migration_file}"
-            for entry in "${gce_entries[@]}"; do
-              echo "${entry}," >> "${migration_file}"
-            done
-            echo "  ]" >> "${migration_file}"
-          fi
-
-          cat >> "${migration_file}" << 'MIGRATION_FOOTER'
-
-            up do
-              ami_ids.each do |location_name, arch, new_ami, old_ami|
-                next if old_ami.empty?
-                count = from(:pg_aws_ami)
-                  .where(aws_location_name: location_name, arch:, family:, aws_ami_id: old_ami)
-                  .update(aws_ami_id: new_ami)
-                raise Sequel::Error, "pg_aws_ami: no #{family} row for #{location_name}/#{arch} at #{old_ami}" if count.zero?
-              end
-
-              gce_images.each do |arch, new_name, old_name|
-                count = from(:pg_gce_image)
-                  .where(arch:, family:, gce_image_name: old_name)
-                  .update(gce_image_name: new_name)
-                raise Sequel::Error, "pg_gce_image: expected 1 #{family} row for #{arch} at #{old_name}, updated #{count}" unless count == 1
-              end
-            end
-
-            down do
-              ami_ids.each do |location_name, arch, new_ami, old_ami|
-                next if old_ami.empty?
-                count = from(:pg_aws_ami)
-                  .where(aws_location_name: location_name, arch:, family:, aws_ami_id: new_ami)
-                  .update(aws_ami_id: old_ami)
-                raise Sequel::Error, "pg_aws_ami: no #{family} row for #{location_name}/#{arch} at #{new_ami}" if count.zero?
-              end
-
-              gce_images.each do |arch, new_name, old_name|
-                count = from(:pg_gce_image)
-                  .where(arch:, family:, gce_image_name: new_name)
-                  .update(gce_image_name: old_name)
-                raise Sequel::Error, "pg_gce_image: expected 1 #{family} row for #{arch} at #{new_name}, updated #{count}" unless count == 1
-              end
-            end
-          end
-          MIGRATION_FOOTER
-
-          echo "Created migration file: ${migration_file}"
-          cat "${migration_file}"
-
-      - name: Create Pull Request
-        env:
-          GH_TOKEN: ${{ secrets.UBICLOUD_REPO_PAT }}
-        run: |
-          cd ubicloud
-
-          # Configure git
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # Configure git to use the PAT for authentication
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/ubicloud/ubicloud.git"
-
-          image_name="${{ steps.collect.outputs.image_name }}"
-          version="${{ inputs.image_suffix }}"
-          branch_name="update-${image_name}-images-${version}"
-          title="Update ${image_name} images to ${version}"
-
-          # Check if PR already exists for this branch
-          existing_pr=$(gh pr list --repo ubicloud/ubicloud --head "${branch_name}" --json number -q '.[0].number')
-          if [ -n "$existing_pr" ]; then
-            echo "PR #${existing_pr} already exists for branch ${branch_name}"
-            echo "### Existing PR" >> $GITHUB_STEP_SUMMARY
-            gh pr view --repo ubicloud/ubicloud "${existing_pr}" --json url -q '.url' >> $GITHUB_STEP_SUMMARY
-            exit 0
-          fi
-
-          # Delete remote branch if it exists (from failed previous run)
-          git push origin --delete "${branch_name}" 2>/dev/null || true
-
-          # Create branch and commit
-          git checkout -b "${branch_name}"
-          git add -A
-          git commit -m "${title}"
-
-          # Push branch
-          git push -u origin "${branch_name}"
-
-          # Create PR
-          gh pr create \
-            --repo ubicloud/ubicloud \
-            --head "${branch_name}" \
-            --title "${title}" \
-            --body "## Summary
-          - Updates the \`${image_name}\` boot image version and SHA256 hashes in \`prog/download_boot_image.rb\`
-          - Adds a single migration updating \`ubuntu-${{ inputs.ubuntu_release }}\` AWS AMI IDs in \`pg_aws_ami\` and GCE image names in \`pg_gce_image\`
-
-          ## Image Family
-          \`ubuntu-${{ inputs.ubuntu_release }}\`
-
-          ## Image Version
-          \`${version}\`
-
-          ## Changes
-          - x64 SHA256: \`${{ steps.collect.outputs.x64_sha256 }}\`
-          - arm64 SHA256: \`${{ steps.collect.outputs.arm64_sha256 }}\`
-          - GCE x64: \`${{ steps.collect.outputs.x64_gce_image_name }}\`
-          - GCE arm64: \`${{ steps.collect.outputs.arm64_gce_image_name }}\`
-
-          🤖 Generated by [postgres-vm-images](https://github.com/ubicloud/postgres-vm-images) workflow"
-
-          echo "### PR Created" >> $GITHUB_STEP_SUMMARY
-          gh pr view --repo ubicloud/ubicloud "${branch_name}" --json url -q '.url' >> $GITHUB_STEP_SUMMARY
+      - name: Upload build outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-outputs-ubuntu-${{ inputs.ubuntu_release }}
+          path: build-outputs-ubuntu-${{ inputs.ubuntu_release }}.env
+          overwrite: true
