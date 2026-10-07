@@ -120,4 +120,30 @@ for PG_VERSION in 17 18; do
 done
 rm -rf ${PG_TEXTSEARCH_TMP}
 
+# ClickHouse pg_clickhouse (foreign data wrapper for ClickHouse). It is not
+# in PGDG and has no prebuilt debs, so build the release bundle, which
+# vendors its header-only ClickHouse client libraries.
+echo "=== [setup_packages.sh] Building and installing pg_clickhouse extension ==="
+apt-get install -y libcurl4-openssl-dev liblz4-dev libssl-dev libzstd-dev uuid-dev
+
+PG_CLICKHOUSE_VERSION="0.11.0"
+PG_CLICKHOUSE_TMP="/tmp/pg_clickhouse"
+mkdir -p ${PG_CLICKHOUSE_TMP}
+curl -fL -o ${PG_CLICKHOUSE_TMP}/pg_clickhouse.zip \
+    "https://github.com/ClickHouse/pg_clickhouse/releases/download/v${PG_CLICKHOUSE_VERSION}/pg_clickhouse-${PG_CLICKHOUSE_VERSION}.zip"
+unzip -o -d ${PG_CLICKHOUSE_TMP} ${PG_CLICKHOUSE_TMP}/pg_clickhouse.zip
+cd ${PG_CLICKHOUSE_TMP}/pg_clickhouse-${PG_CLICKHOUSE_VERSION}
+
+# The Makefile builds with -Werror, and GCC 15 on 26.04 reports a false
+# -Wclobbered. Drop the flag after a release with ClickHouse/pg_clickhouse#394.
+for PG_VERSION in 16 17 18; do
+    echo "[setup_packages.sh] Building pg_clickhouse for PostgreSQL ${PG_VERSION}..."
+    make PG_CONFIG=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config COPT=-Wno-error=clobbered
+    make PG_CONFIG=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config install
+    make PG_CONFIG=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config clean
+done
+
+cd /tmp
+rm -rf ${PG_CLICKHOUSE_TMP}
+
 echo "=== [setup_packages.sh] Complete ==="

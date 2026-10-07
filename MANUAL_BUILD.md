@@ -65,7 +65,7 @@ The build uses a **direct mount + chroot** approach for native-speed execution:
 4. **Chroot** into mounted filesystem
 5. **Execute** setup scripts at native CPU speed:
    - `setup_base.sh` - GNU userland pin (25.10+), kernel, PostgreSQL APT repo, base packages
-   - `setup_packages.sh` - Build WAL-G, pguint, and walg_archive from source
+   - `setup_packages.sh` - Build WAL-G, pguint, walg_archive, and pg_clickhouse from source
    - `setup_monitoring.sh` - Prometheus, node_exporter, postgres_exporter, AWS agents
    - `setup_cleanup.sh` - Cloud-init and grub configuration
 6. **Cleanup** - Zero-fill, unmount, detach loop device

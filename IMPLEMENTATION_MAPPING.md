@@ -34,6 +34,7 @@ This approach is significantly faster than QEMU-based builds, especially on ARM6
 - **Builds pguint extension** for PG 16, 17, 18
 - **Builds walg_archive extension** for PG 16, 17, 18
 - Installs pg_textsearch for PG 17, 18
+- **Builds pg_clickhouse extension** for PG 16, 17, 18 (pinned release)
 
 ### common/setup_monitoring.sh
 - Downloads and installs Prometheus, node_exporter, postgres_exporter
@@ -58,7 +59,7 @@ This approach is significantly faster than QEMU-based builds, especially on ARM6
 
 ### PostgreSQL
 - Versions: 16, 17, 18 (packages downloaded, not installed)
-- Extensions: pguint, walg_archive (built from source for each version)
+- Extensions: pguint, walg_archive, pg_clickhouse (built from source for each version)
 
 ### WAL-G
 - Built from source for native architecture

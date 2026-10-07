@@ -32,7 +32,7 @@ through sudo and coreutils and depends on exact GNU behavior.
 
 ### PostgreSQL Stack
 - **PostgreSQL**: Versions 16, 17, and 18 (packages cached, not installed)
-- **Extensions**: pg_cron, pgvector, postgis-3, pgaudit, pglogical, pgrouting, pgtap, hypopg, pg_repack, partman, h3, hll, mysql-fdw, tds-fdw, orafce, similarity, pguint, VectorChord, pg_tokenizer, VectorChord-bm25, pg_textsearch (17/18)
+- **Extensions**: pg_cron, pgvector, postgis-3, pgaudit, pglogical, pgrouting, pgtap, hypopg, pg_repack, partman, h3, hll, mysql-fdw, tds-fdw, orafce, similarity, pguint, VectorChord, pg_tokenizer, VectorChord-bm25, pg_textsearch (17/18), pg_clickhouse
 - **WAL-G**: Built from source for backup/restore (plus walg_archive extension)
 - **pgbouncer**: Connection pooling
 
@@ -69,7 +69,7 @@ postgres-vm-images/
 ├── gce-postprocess.sh           # GCE-specific post-processing (grub, guest agent)
 ├── common/                      # Shared setup scripts
 │   ├── setup_base.sh            # PostgreSQL repos, users, package caching
-│   ├── setup_packages.sh        # WAL-G, pguint, walg_archive compilation
+│   ├── setup_packages.sh        # WAL-G, pguint, walg_archive, pg_clickhouse compilation
 │   ├── setup_monitoring.sh      # Prometheus stack installation
 │   ├── setup_cleanup.sh         # Cloud-init and system cleanup
 │   └── assets/                  # Service files and package lists
@@ -90,7 +90,7 @@ postgres-vm-images/
    on 24.04+ images this includes the separate `/boot` and `/boot/efi` partitions
 4. Runs setup scripts:
    - `setup_base.sh`: GNU userland pin, kernel, PostgreSQL repository, users/groups, package caching
-   - `setup_packages.sh`: Builds WAL-G, pguint, and walg_archive from source
+   - `setup_packages.sh`: Builds WAL-G, pguint, walg_archive, and pg_clickhouse from source
    - `setup_monitoring.sh`: Installs monitoring stack and AWS agents
    - `setup_cleanup.sh`: Cloud-init cleanup, grub configuration
 5. Cleans up: removes SSH host keys, clears machine-id, zeros free space
