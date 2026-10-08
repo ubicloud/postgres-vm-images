@@ -23,7 +23,7 @@ on:
         type: boolean
       ubuntu_2204:
         description: "Build ubuntu-2204 images"
-        default: false
+        default: true
         type: boolean
       build_only:
         description: "⚡ Build only (skip all uploads) - for testing"
@@ -31,7 +31,7 @@ on:
         type: boolean
       build_arm64:
         description: "Build ARM64 image"
-        default: false
+        default: true
         type: boolean
       run_apt_upgrade:
         description: "Run apt upgrade during build (can be slow and unnecessary on recently built runners)"
@@ -39,19 +39,19 @@ on:
         type: boolean
       upload_image:
         description: "📤 Upload to MinIO (ignored if build_only)"
-        default: false
+        default: true
         type: boolean
       upload_r2:
         description: "📤 Upload to R2 (ignored if build_only)"
-        default: false
+        default: true
         type: boolean
       upload_gce:
         description: "📤 Create GCE image"
-        default: false
+        default: true
         type: boolean
       upload_aws_ami:
         description: "📤 Create AWS AMI"
-        default: false
+        default: true
         type: boolean
       aws_ami_regions:
         description: "AWS regions for AMI"
@@ -59,7 +59,7 @@ on:
         default: "us-west-2,us-east-1,us-east-2,eu-west-1,ap-southeast-2"
       create_ubicloud_pr:
         description: "🔄 Create PR to ubicloud/ubicloud with updated image versions"
-        default: false
+        default: true
         type: boolean
       test_pr_creation:
         description: "🧪 TEST ONLY: Skip builds, use dummy values to test PR creation"

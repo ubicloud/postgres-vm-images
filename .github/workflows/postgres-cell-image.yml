@@ -28,15 +28,15 @@ on:
         type: boolean
       upload_image:
         description: "📤 Upload to MinIO (ignored if build_only)"
-        default: false
+        default: true
         type: boolean
       upload_r2:
         description: "📤 Upload to R2 (ignored if build_only)"
-        default: false
+        default: true
         type: boolean
       create_ubicloud_pr:
         description: "🔄 Create PR to ubicloud/ubicloud with updated image versions"
-        default: false
+        default: true
         type: boolean
       test_pr_creation:
         description: "🧪 TEST ONLY: Skip builds, use dummy values to test PR creation"
