@@ -14,7 +14,7 @@ on:
         type: boolean
       ubuntu_2204:
         description: "Clean up ubuntu-2204 images"
-        default: false
+        default: true
         type: boolean
       architecture:
         description: "Architecture(s) to clean up"
@@ -39,7 +39,7 @@ on:
         type: boolean
       cleanup_gce:
         description: "🗑️ Clean up GCE images and GCS tarballs"
-        default: false
+        default: true
         type: boolean
       aws_ami_regions:
         description: "AWS regions to clean up AMIs from (comma-separated)"
