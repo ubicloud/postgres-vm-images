@@ -1,5 +1,5 @@
 name: Cleanup Images
-run-name: Cleanup ${{ inputs.image_suffix }} ${{ inputs.architecture }}
+run-name: Cleanup ${{ inputs.image_suffix }}${{ inputs.ubuntu_2604 && ' ubuntu-2604' || '' }}${{ inputs.ubuntu_2204 && ' ubuntu-2204' || '' }} ${{ inputs.architecture }}
 
 on:
   workflow_dispatch:
@@ -8,14 +8,14 @@ on:
         description: "Image version suffix to clean up (e.g., YYYYMMDD.X.Y)"
         type: string
         required: true
-      ubuntu_release:
-        description: "Ubuntu release of the images to clean up"
-        required: true
-        default: "2604"
-        type: choice
-        options:
-          - "2604"
-          - "2204"
+      ubuntu_2604:
+        description: "Clean up ubuntu-2604 images"
+        default: true
+        type: boolean
+      ubuntu_2204:
+        description: "Clean up ubuntu-2204 images"
+        default: false
+        type: boolean
       architecture:
         description: "Architecture(s) to clean up"
         required: true
@@ -56,8 +56,12 @@ permissions:
 
 jobs:
   cleanup:
-    name: Cleanup images for ${{ inputs.image_suffix }}
+    name: Cleanup ubuntu-${{ matrix.ubuntu_release }} images for ${{ inputs.image_suffix }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu_release: ${{ fromJSON(inputs.ubuntu_2604 && inputs.ubuntu_2204 && '["2604","2204"]' || inputs.ubuntu_2604 && '["2604"]' || inputs.ubuntu_2204 && '["2204"]' || '[]') }}
     steps:
       - name: Print inputs
         run: |
@@ -67,15 +71,15 @@ jobs:
       - name: Set image names
         id: set_image_names
         run: |
-          x64_image_name="postgres-ubuntu-${{ inputs.ubuntu_release }}-x64-${{ inputs.image_suffix }}"
-          arm64_image_name="postgres-ubuntu-${{ inputs.ubuntu_release }}-arm64-${{ inputs.image_suffix }}"
+          x64_image_name="postgres-ubuntu-${{ matrix.ubuntu_release }}-x64-${{ inputs.image_suffix }}"
+          arm64_image_name="postgres-ubuntu-${{ matrix.ubuntu_release }}-arm64-${{ inputs.image_suffix }}"
 
           # GCE image names cannot contain dots; build workflow sanitizes
           # them the same way. Mirror that here so cleanup matches what
           # was actually created.
           suffix="${{ inputs.image_suffix }}"
-          x64_gce_image_name="postgres-ubuntu-${{ inputs.ubuntu_release }}-x64-${suffix//./-}"
-          arm64_gce_image_name="postgres-ubuntu-${{ inputs.ubuntu_release }}-arm64-${suffix//./-}"
+          x64_gce_image_name="postgres-ubuntu-${{ matrix.ubuntu_release }}-x64-${suffix//./-}"
+          arm64_gce_image_name="postgres-ubuntu-${{ matrix.ubuntu_release }}-arm64-${suffix//./-}"
 
           echo "x64_image_name=${x64_image_name}" >> $GITHUB_OUTPUT
           echo "arm64_image_name=${arm64_image_name}" >> $GITHUB_OUTPUT
