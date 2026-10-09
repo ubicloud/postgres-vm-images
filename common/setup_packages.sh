@@ -18,7 +18,7 @@ apt-get install -y golang-go cmake
 
 # Install Python and PostgreSQL development packages for all versions
 echo "[setup_packages.sh] Installing python3, pip, and postgresql-server-dev packages..."
-apt-get install -y python3 python3-pip unzip postgresql-server-dev-16 postgresql-server-dev-17 postgresql-server-dev-18
+apt-get install -y python3 python3-pip unzip postgresql-server-dev-16 postgresql-server-dev-17 postgresql-server-dev-18 postgresql-server-dev-19
 
 # Create symlink for python if needed (may already exist)
 ln -sf /usr/bin/python3 /usr/bin/python 2>/dev/null || true
@@ -80,6 +80,12 @@ make clean
 echo "[setup_packages.sh] Building pguint for PostgreSQL 18..."
 make PG_CONFIG=/usr/lib/postgresql/18/bin/pg_config
 make PG_CONFIG=/usr/lib/postgresql/18/bin/pg_config install
+make clean
+
+# Build for PG 19
+echo "[setup_packages.sh] Building pguint for PostgreSQL 19..."
+make PG_CONFIG=/usr/lib/postgresql/19/bin/pg_config
+make PG_CONFIG=/usr/lib/postgresql/19/bin/pg_config install
 
 # Clean up
 cd /tmp
@@ -96,7 +102,7 @@ git remote add origin https://github.com/wal-g/walg_archive.git
 git fetch origin --depth 1 ed5674da1a6bbd403ecda971134a67a824b70a2f
 git reset --hard FETCH_HEAD
 
-for PG_VERSION in 16 17 18; do
+for PG_VERSION in 16 17 18 19; do
     echo "[setup_packages.sh] Building walg_archive for PostgreSQL ${PG_VERSION}..."
     make USE_PGXS=1 PG_CONFIG=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config
     make USE_PGXS=1 PG_CONFIG=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config install
@@ -107,7 +113,7 @@ cd /tmp
 rm -rf walg_archive
 
 # Timescale pg_textsearch (BM25 ranking). Prebuilt debs exist for
-# PG 17 and 18 on amd64 and arm64; PG 16 has no upstream build.
+# PG 17 and 18 on amd64 and arm64; PG 16 and 19 have no upstream build.
 PG_TEXTSEARCH_VERSION="1.3.0"
 PG_TEXTSEARCH_TMP="/tmp/pg_textsearch"
 mkdir -p ${PG_TEXTSEARCH_TMP}
@@ -136,7 +142,7 @@ cd ${PG_CLICKHOUSE_TMP}/pg_clickhouse-${PG_CLICKHOUSE_VERSION}
 
 # The Makefile builds with -Werror, and GCC 15 on 26.04 reports a false
 # -Wclobbered. Drop the flag after a release with ClickHouse/pg_clickhouse#394.
-for PG_VERSION in 16 17 18; do
+for PG_VERSION in 16 17 18 19; do
     echo "[setup_packages.sh] Building pg_clickhouse for PostgreSQL ${PG_VERSION}..."
     make PG_CONFIG=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config COPT=-Wno-error=clobbered
     make PG_CONFIG=/usr/lib/postgresql/${PG_VERSION}/bin/pg_config install

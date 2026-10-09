@@ -9,7 +9,7 @@ PACKAGE_CACHE="/var/cache/postgresql-packages"
 
 usage() {
     echo "Usage: $0 <postgresql-version>"
-    echo "  postgresql-version: 16, 17, or 18"
+    echo "  postgresql-version: 16, 17, 18, or 19"
     echo ""
     echo "Example: $0 17"
     exit 1
@@ -21,8 +21,8 @@ fi
 
 VERSION="$1"
 
-if [[ ! "$VERSION" =~ ^(16|17|18)$ ]]; then
-    echo "Error: Invalid PostgreSQL version '$VERSION'. Must be 16, 17, or 18."
+if [[ ! "$VERSION" =~ ^(16|17|18|19)$ ]]; then
+    echo "Error: Invalid PostgreSQL version '$VERSION'. Must be 16, 17, 18, or 19."
     exit 1
 fi
 

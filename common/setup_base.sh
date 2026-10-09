@@ -82,7 +82,7 @@ echo "=== [setup_base.sh] Configuring PostgreSQL repositories ==="
 # Add PostgreSQL repository
 echo "[setup_base.sh] Downloading PostgreSQL GPG key..."
 curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
-sh -c 'echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+sh -c 'echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main 19" > /etc/apt/sources.list.d/pgdg.list'
 
 # Add golang PPA for WAL-G (--no-update to avoid apt-get update inside add-apt-repository)
 echo "[setup_base.sh] Adding golang PPA..."
@@ -208,7 +208,7 @@ chmod 755 /usr/local/bin/install-postgresql-packages
 echo "[setup_base.sh] Downloading PostgreSQL packages as .deb files..."
 PACKAGE_CACHE="/var/cache/postgresql-packages"
 
-for version in 16 17 18; do
+for version in 16 17 18 19; do
     echo "[setup_base.sh] Downloading packages for PostgreSQL $version..."
     mkdir -p "$PACKAGE_CACHE/$version"
     pushd "$PACKAGE_CACHE/$version" > /dev/null
@@ -223,7 +223,8 @@ xargs -a /usr/local/share/postgresql/packages/common.txt apt-get download
 popd > /dev/null
 
 # Download VectorChord extension packages from GitHub releases
-# Not available in PostgreSQL APT repo, so downloaded separately
+# Not available in PostgreSQL APT repo, so downloaded separately. There is
+# no PG 19 build yet.
 echo "[setup_base.sh] Downloading VectorChord extension packages..."
 VCHORD_VERSION="1.1.1"
 VCHORD_VERSION_FULL="1.1.1-1"
