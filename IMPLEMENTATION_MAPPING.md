@@ -21,7 +21,7 @@ This approach is significantly faster than QEMU-based builds, especially on ARM6
 - Installs postgresql-common
 - Configures createcluster.conf (data checksums, no auto cluster)
 - Enables symbolized PostgreSQL core dumps (systemd-coredump, capped at 2G)
-- Downloads PostgreSQL packages for versions 16, 17, 18
+- Downloads PostgreSQL packages for versions 16, 17, 18, 19
 - Creates users: prometheus, ubi_monitoring
 - Creates cert_readers group
 - Sets up IMDS protection (nftables)
@@ -31,10 +31,10 @@ This approach is significantly faster than QEMU-based builds, especially on ARM6
 - Installs Python and PostgreSQL dev packages
 - **Builds WAL-G from source** (see pinned commit in the script)
 - Builds walg-daemon-client
-- **Builds pguint extension** for PG 16, 17, 18
-- **Builds walg_archive extension** for PG 16, 17, 18
+- **Builds pguint extension** for PG 16, 17, 18, 19
+- **Builds walg_archive extension** for PG 16, 17, 18, 19
 - Installs pg_textsearch for PG 17, 18
-- **Builds pg_clickhouse extension** for PG 16, 17, 18 (pinned release)
+- **Builds pg_clickhouse extension** for PG 16, 17, 18, 19 (pinned release)
 
 ### common/setup_monitoring.sh
 - Downloads and installs Prometheus, node_exporter, postgres_exporter
@@ -58,7 +58,7 @@ This approach is significantly faster than QEMU-based builds, especially on ARM6
 ## Installed Components
 
 ### PostgreSQL
-- Versions: 16, 17, 18 (packages downloaded, not installed)
+- Versions: 16, 17, 18, 19 (packages downloaded, not installed)
 - Extensions: pguint, walg_archive, pg_clickhouse (built from source for each version)
 
 ### WAL-G
