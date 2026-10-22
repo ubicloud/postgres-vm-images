@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+case "$(readlink -f /usr/bin/ruby)" in
+    */ruby3.3) ;;
+    *) exit 0 ;;
+esac
+
+source_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+install -D -m 0644 "$source_dir/../lib/restore_as.rb" /usr/local/lib/ubicloud/restore_as.rb
+install -D -m 0755 "$source_dir/ruby" /usr/local/bin/ruby
+
+/usr/local/bin/ruby -e '
+  exit Process.getrlimit(:AS)[0] == Process::RLIM_INFINITY &&
+    File.read("/proc/self/status")[/^VmSize:\s+(\d+)/, 1].to_i < 384 * 1024
+'

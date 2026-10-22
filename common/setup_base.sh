@@ -77,6 +77,9 @@ apt-get install -y "${KERNEL_PKGS[@]}"
 echo "=== [setup_base.sh] Installing ruby-bundler ==="
 apt-get install -y ruby-bundler
 
+echo "=== [setup_base.sh] Configuring Ruby startup memory ==="
+sh /tmp/common/assets/ruby/bin/setup-ruby
+
 echo "=== [setup_base.sh] Configuring PostgreSQL repositories ==="
 
 # Add PostgreSQL repository

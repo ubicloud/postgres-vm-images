@@ -1,0 +1,11 @@
+#!/bin/dash
+set -eu
+
+# Make the optional 384 MiB shape cache fail before restoring the limit.
+startup_kib=262144
+UBICLOUD_RUBY_AS_LIMIT=$(ulimit -S -v)
+export UBICLOUD_RUBY_AS_LIMIT
+if [ "$UBICLOUD_RUBY_AS_LIMIT" = unlimited ] || [ "$UBICLOUD_RUBY_AS_LIMIT" -gt "$startup_kib" ]; then
+    ulimit -S -v "$startup_kib"
+fi
+exec /usr/bin/ruby -r/usr/local/lib/ubicloud/restore_as.rb "$@"
