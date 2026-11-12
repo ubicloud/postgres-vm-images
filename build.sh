@@ -194,6 +194,9 @@ chroot ${MOUNT_POINT} /bin/bash -c "
 
   echo '=== Running setup_cleanup.sh ==='
   /tmp/common/setup_cleanup.sh
+
+  echo '=== Running verify_package_cache.sh ==='
+  /tmp/common/verify_package_cache.sh
 "
 
 echo "=== Running final cleanup in chroot ==="
