@@ -46,6 +46,10 @@ This approach is significantly faster than QEMU-based builds, especially on ARM6
 - Cleans cloud-init state for first-boot re-initialization
 - Configures the cloud-init datasource list and grub serial console
 
+### common/verify_package_cache.sh
+- Simulates the offline `install-postgresql-packages` run for each cached
+  version and fails the build if a dependency is missing
+
 ## Final Cleanup (in build.sh)
 
 - Removes SSH host keys (regenerated on first boot)
