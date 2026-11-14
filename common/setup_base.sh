@@ -174,7 +174,7 @@ EOF
 echo "[setup_base.sh] Installing PostgreSQL extension dependencies..."
 case "${UBUNTU_RELEASE}" in
     2604)
-        EXTENSION_LIBS=(libevent-2.1-7t64 libgdal38 libgeos-c1t64 libproj25 libsfcgal2)
+        EXTENSION_LIBS=(libevent-2.1-7t64 libgdal39 libgeos-c1t64 libproj25 libsfcgal2)
         ;;
     2204)
         EXTENSION_LIBS=(libevent-2.1-7 libgdal30 libgeos-c1v5 libproj22 libsfcgal1)
