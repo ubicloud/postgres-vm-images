@@ -32,7 +32,7 @@ through sudo and coreutils and depends on exact GNU behavior.
 
 ### PostgreSQL Stack
 - **PostgreSQL**: Versions 16, 17, 18, and 19 (packages cached, not installed)
-- **Extensions**: pg_cron, pgvector, postgis-3, pgaudit, pglogical, pgrouting, pgtap, hypopg, pg_repack, partman, h3 (16-18), hll, mysql-fdw (16-18), tds-fdw (16-18), orafce, similarity (16-18), pguint, VectorChord (16-18), pg_tokenizer (16-18), VectorChord-bm25 (16-18), pg_textsearch (17/18), pg_clickhouse
+- **Extensions**: pg_cron, pgvector, postgis-3, pgaudit, pglogical, pgrouting, pgtap, hypopg, pg_repack, partman, h3, hll, mysql-fdw (16-18), tds-fdw (16-18), orafce, similarity (16-18), pguint, VectorChord (16-18), pg_tokenizer (16-18), VectorChord-bm25 (16-18), pg_textsearch (17/18), pg_clickhouse
 - **WAL-G**: Built from source for backup/restore (plus walg_archive extension)
 - **pgbouncer**: Connection pooling
 
