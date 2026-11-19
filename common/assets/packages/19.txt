@@ -2,6 +2,8 @@ postgresql-19
 postgresql-19-cron
 postgresql-19-cron-dbgsym
 postgresql-19-dbgsym
+postgresql-19-h3
+postgresql-19-h3-dbgsym
 postgresql-19-hll
 postgresql-19-hll-dbgsym
 postgresql-19-hypopg
